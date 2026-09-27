@@ -1,0 +1,7 @@
+# Build / IDE artifacts
+Debug/
+.DS_Store
+
+# Study notes under doc/ are tracked — do not ignore.
+!doc/
+!doc/**
