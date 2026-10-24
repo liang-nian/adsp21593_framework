@@ -388,7 +388,9 @@ Matthial 绘制，CC0。[Wikimedia Commons: I²S ajastusdiagramm.png](https://co
 
 Matthial 绘制，CC0。[Wikimedia Commons: I²S ajastusnõuded.png](https://commons.wikimedia.org/wiki/File:I%C2%B2S_ajastusn%C3%B5uded.png)
 
-TDM 的脉冲帧没有一张同等、并且允许再发布的波形图。公开教程里把若干时隙、帧同步和串行数据画在一起的是 Cirrus Logic AN301《Time Division Multiplexed Audio Interface》的 Figure 2，版权在 Cirrus，笔记里不嵌这张图。[AN301 Rev 1](https://statics.cirrus.com/pubs/appNote/AN301REV1.pdf)
+下图是本工程一根数据线上的帧。SPORT0 的 `adi_sport_ConfigMC(..., 1, 15, ...)` 是 16 个时隙、帧延时 1。`adi_sport_ConfigFrameSync` 的 `bActiveHighFS` 为 true、`bLateFS` 为 false：FS 高电平只有一个 BCLK，时隙 0 的 MSB 比这个脉冲晚一个 BCLK。每个时隙 32 个 BCLK，MSB 在前。SPORT1 和 SPORT2 把参数写成 31，是两根这样的线。
+
+![本工程的 TDM16：脉冲 FS，MSB 晚一个 BCLK](fig/tdm16.png)
 
 两根 DATA 共用同一对 BCLK/FS 时，每根仍是自己的 TDM16。软件可以把两根排进一块 32 槽缓冲，脚上并没有一根 32 槽的线。
 
