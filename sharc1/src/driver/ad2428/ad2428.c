@@ -1,9 +1,10 @@
+#include <stddef.h>
 #include <stdint.h>
 
 #include "ad2428.h"
 #include "ad2428_reg.h"
 #include "twi/twi.h"
-#include "uart/uart.h"
+#include "log/log.h"
 
 #define TIME_BND        (0x100000u)
 #define DATA_ERR_BND    (7u)
@@ -21,6 +22,11 @@ typedef struct Ad2428Msg {
 
 static Ad2428Msg ad24280_mon = {0};
 static Ad2428Msg ad24281_mon = {0};
+static uint8_t ad2428_clk_ready;
+
+void Ad2428ClkReady(uint8_t ready) {
+  ad2428_clk_ready = ready;
+};
 
 static void Ad2428CfgDelay(uint32_t delay_val) {
 	volatile uint32_t delay_cnt = delay_val * TIME_BND;
@@ -52,8 +58,11 @@ static void Ad2428Mon(uint8_t master_dev, Ad2428Msg* mon) {
   ShtLog("node num: %d.\n", mon->node_num);
 };
 
-static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
-                      Ad2428Msg* mon) {
+/* 0: script finished. 1: master did not run, or a discovery timed out.
+ * On failure the caller must Twi2Stop(); this function does not close TWI.
+ */
+static uint8_t Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
+                         Ad2428Msg* mon) {
   uint32_t timer = 0;
   uint8_t is_node_found = 0u;
   uint8_t is_master_run = 0u;
@@ -73,19 +82,32 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
     val_len = cfg[i].val_len;
     val_ptr = cfg[i].val_ptr;
 
-    if (val_width > 1u) return;
+    if (val_width > 1u) {
+      ShtLog("ad2428 val width %d unsupported.\n", val_width);
+      return 1u;
+    }
     if(a2b_cmd == WRITE){
+      if (val_ptr == NULL) {
+        return 1u;
+      }
       if (val_len == 1u && reg_width == 1) {
-        Twi2DevRegShtWr(i2c_addr, reg, *val_ptr);
+        Twi2DevRegShtWr(i2c_addr, (uint8_t)reg, *val_ptr);
       }
       else {
         Twi2DevRegLngWr(i2c_addr, reg, reg_width, val_ptr, val_len);
       }
     }
     else if(a2b_cmd == READ){
-      rd_val = Twi2DevRegShtRd(i2c_addr, reg);
+      /* Export stores a placeholder in val_ptr (INTTYPE arrays are 0x00, not
+       * 0xFF/24). Master-run and DSCDONE are checked in the DELAY polls.
+       */
+      rd_val = Twi2DevRegShtRd(i2c_addr, (uint8_t)reg);
+      (void)rd_val;
     }
     else if(a2b_cmd == DELAY){
+      if (val_ptr == NULL) {
+        return 1u;
+      }
       if(val_len == 2u){
         delay_val = val_ptr[1];
       }
@@ -93,12 +115,15 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
         delay_val = val_ptr[0];
       }
       Ad2428CfgDelay(delay_val);
-      if(i == 1){
+      /* First script step is CONTROL 0x84, then this delay (index 1).
+       * Later CONTROL writes (ENDDSC 0x81) are not the PLL-lock wait.
+       */
+      if (i == 1u && last_reg == AD2428_REG_CONTROL) {
         timer = 0u;
         while (!is_master_run){
           if (timer > TIME_BND) {
             ShtLog("master run timeout.\n");
-            break;
+            return 1u;
           }
           if (Twi2DevRegShtRd(master_dev, AD2428_REG_INTSRC) &&
              Twi2DevRegShtRd(master_dev, AD2428_REG_INTTYPE) ==
@@ -109,12 +134,12 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
           timer++;
         }
       }
-      if(last_reg == 0x13u){
+      if(last_reg == AD2428_REG_DISCVRY){
         timer = 0u;
         while(!is_node_found){
           if (timer > TIME_BND) {
             ShtLog("slave %d discover timeout.\n", mon->node_num + 1u);
-            break;
+            return 1u;
           }
           if (Twi2DevRegShtRd(master_dev, AD2428_REG_INTSRC) &&
              Twi2DevRegShtRd(master_dev, AD2428_REG_INTTYPE) ==
@@ -130,10 +155,13 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
     }
     last_reg = reg;
   }
+  return 0u;
 };
 
 void Ad24280Mon(void) {
-  Twi2Open();
+  if (Twi2Open() != 0u) {
+    return;
+  }
   Ad2428Mon(AD24280_MASTER_DEV, &ad24280_mon);
   Twi2Stop();
 };
@@ -144,9 +172,26 @@ void Ad24281Mon(void) {
 };
 
 void Ad24280Init(void) {
-  Twi2Open();
-  Ad2428Cfg(AD24280_MASTER_DEV, ad24280_cfg, AD24280_CFG_LEN, &ad24280_mon);
+  /* USBi does not generate BCLK/FS. The DAC clock must already be on the
+   * pads, and TWI2 must be idle, before an external master is attached.
+   */
+  if (!ad2428_clk_ready) {
+    ShtLog("ad24280 skip: bclk/fs not ready.\n");
+    return;
+  }
+#if AD2428_USBI_OWNS_TWI
+  ShtLog("ad24280 skip: usbi owns twi2, bus left idle.\n");
+  return;
+#else
+  if (Twi2Open() != 0u) {
+    return;
+  }
+  if (Ad2428Cfg(AD24280_MASTER_DEV, ad24280_cfg, AD24280_CFG_LEN,
+                &ad24280_mon) != 0u) {
+    ShtLog("ad24280 cfg abort, twi released.\n");
+  }
   Twi2Stop();
+#endif
 };
 
 void Ad24281Init(void) {

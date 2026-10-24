@@ -36,7 +36,7 @@ Wrong SCLK → wrong period; disabling timer stalls UART RX; keep ISR lightweigh
 
 ### 1. 代码实现
 
-**音频链位置：** `Tmr0Init()` 在 `Spu0Init` 之后、`Uart0Init` 之后（当前 `AudioFlowInit`：Spu → Tmr → Uart）— **UART RX 写指针的生产者节拍**。
+**音频链位置：** `Tmr0Init()` 在 `Uart0Init` 成功之后（`AudioFlowInit`：Spu → Uart → Tmr）。定时器中断会调用 `Uart0Poll`，UART DMA 必须已经启动。`Tmr0Cfg()` 只填结构体，真正写入硬件的是 `adi_tmr_Config()`。
 
 **公开 API：** `Tmr0Init()`, `Tmr0En()`, `Tmr0Close()`（`timer.h`）。
 

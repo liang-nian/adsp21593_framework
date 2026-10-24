@@ -39,7 +39,7 @@ See mermaid diagrams in 中文 section.
 
 ### 1. 代码实现
 
-**音频链位置：** `Uart0Init` 在 `AudioFlowInit` 中 SPU/TMR 之后、Switch 之前；**非实时音频路径**，供调试与 monitor 命令。
+**音频链位置：** `Uart0Init` 在 `Spu0Init` 之后、`Tmr0Init` 之前。定时器中断里的 `Uart0Poll` 依赖 RX DMA 已经启动。
 
 **公开 API：** `Uart0Init`, `Uart0Poll`, `Uart0Rd`, `Uart0Wr`（`uart.h`）。
 
@@ -68,10 +68,13 @@ flowchart TB
 - `Tmr0Callback` → **`Uart0Poll`** 每 1 ms：
 
 ```text
-cur_wr_idx = DMA_LEN - UART0_RXDMA_XCNT_CUR;   // 已写入位置
-检测 overrun（rd/wr 与旧 wr 关系）
-rx_wr_idx = cur_wr_idx;
+xcnt = UART0_RXDMA_XCNT_CUR          // 剩余计数；0 表示回绕到下标 0
+cur = (xcnt == 0) ? 0 : DMA_LEN - xcnt
+overrun = 本拍写入字节数 >= 从旧写指针正向走到读指针的距离
+rx_wr_idx = cur
 ```
+
+`Uart0Rd` 在 `rd == wr` 时返回 1，这是空队列，**不计入** `underrun_cnt`（主循环空转会把该计数打满）。真正的覆盖在 `Uart0Poll` 里累加 `overrun_cnt`。
 
 - **`Uart0Rd`：** 若 `rx_rd_idx == rx_wr_idx` → underrun，返回 1；否则取一字节，`rx_rd_idx` 回绕。
 

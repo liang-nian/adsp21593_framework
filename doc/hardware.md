@@ -35,8 +35,8 @@ Cross-links to timing, SPORT stagger, A2B/USBi, TWI isolation, UART polling, boa
 flowchart TB
   MAIN[main / adi_initComponents] --> AF[AudioFlowInit]
   AF --> SPU[Spu0Init]
-  SPU --> TMR[Tmr0Init 1ms]
-  TMR --> UART[Uart0Init]
+  SPU --> UART[Uart0Init]
+  UART --> TMR[Tmr0Init 1ms]
   UART --> SW[Sw0Init]
   SW --> SRU[SruInit]
   SRU --> DACI[Adau19620Init]

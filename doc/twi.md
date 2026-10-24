@@ -88,7 +88,9 @@ flowchart LR
 
 **每驱动单独 Open/Stop** 用一点开关开销换 **故障隔离**（init 频率低，可接受）。
 
-**LSBF / 端序：** SHARC 内存默认 **小端**。I2C 多字节寄存器地址须 **MSBF 上总线** — `Twi2DevRegLngWr` 把 `reg` 按大端拆进 `seq[]` 再 `adi_twi_Write`，不能按小端内存直接发送。单字节地址无此问题。线路 **LSB-first 比特序** 与内存端序不是同一概念。
+**LSBF / 端序：** SHARC 内存默认 **小端**。I2C 多字节寄存器地址须 **MSBF 上总线**。`Twi2DevRegLngWr` 把地址字节和 payload **拼成一次** `adi_twi_Write`（`bRepeatStart = false`），中间不再插 Repeated START。第二次寻址写会让从机看不到「地址紧挨数据」的寄存器写。单字节地址仍走 `Twi2DevRegShtWr`。当前 `ad24280_cfg` 829 条全是 1 字节地址 + 1 字节数据，不调用长写。
+
+`Twi2Open` 在会话已打开时直接失败，避免两个调用者叠用同一个 handle。失败路径不会 `Close` 一个没打开的 handle。
 
 **USBi 互斥：** USBi 占用 TWI2 时固件不得 Open — [ad2428.md](ad2428.md)。
 

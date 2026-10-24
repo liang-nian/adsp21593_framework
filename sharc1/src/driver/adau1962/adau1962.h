@@ -5,7 +5,8 @@
 extern "C" {
 #endif
 
-void Adau19620Init(void);
+/* 0: PLL locked and the register table was written. 1: TWI or PLL failed. */
+uint8_t Adau19620Init(void);
 
 #ifdef __cplusplus
 } // extern "C"
