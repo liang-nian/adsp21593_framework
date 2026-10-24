@@ -6,7 +6,7 @@
 
 ### 1. Code implementation
 
-`AudioFlowInit`: SPU → Timer → UART → Switch → SRU → DAC → ADC → A2B0 → SPORT. Real-time: SPORT DMA → `AudioProcess`. Control: UART command loop — [audio_flow.md](audio_flow.md).
+`AudioFlowInit`: SPU → UART → Timer → Switch → SRU → DAC → ADC → A2B0 → SPORT. Real-time: SPORT DMA → `AudioProcess`. Control: UART command loop — [audio_flow.md](audio_flow.md).
 
 Software flowchart in 中文 section.
 
@@ -35,9 +35,9 @@ Cross-links to timing, SPORT stagger, A2B/USBi, TWI isolation, UART polling, boa
 flowchart TB
   MAIN[main / adi_initComponents] --> AF[AudioFlowInit]
   AF --> SPU[Spu0Init]
-  SPU --> TMR[Tmr0Init 1ms]
-  TMR --> UART[Uart0Init]
-  UART --> SW[Sw0Init]
+  SPU --> UART[Uart0Init]
+  UART --> TMR[Tmr0Init 1ms]
+  TMR --> SW[Sw0Init]
   SW --> SRU[SruInit]
   SRU --> DACI[Adau19620Init]
   DACI --> ADCI[Adau19790Init]

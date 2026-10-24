@@ -3,7 +3,7 @@
 #include "adau1979.h"
 #include "adau1979_reg.h"
 #include "twi/twi.h"
-#include "uart/uart.h"
+#include "log/log.h"
 
 #define TIME_BND    (0xFFFFu)
 

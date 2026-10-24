@@ -13,12 +13,25 @@ static ADI_TWI_HANDLE twi2_dev;
 static uint8_t twi2_mem[ADI_TWI_MEMORY_SIZE];
 #pragma default_section(ALLDATA)
 
+static uint8_t twi2_busy = 0u;
+
+uint8_t Twi2IsIdle(void) {
+  return twi2_busy == 0u;
+};
+
 void Twi2Open(void) {
+  /* A second Open on the same memory while the controller is still
+   * mastered here (or while USBi is the external master) corrupts the
+   * session. Callers must Twi2Stop before the next owner. */
+  if (twi2_busy) {
+    return;
+  }
   adi_twi_Open(TWI2_DEV, ADI_TWI_MASTER, twi2_mem, ADI_TWI_MEMORY_SIZE,
                &twi2_dev);
   adi_twi_SetPrescale(twi2_dev, TWI2_PRESCALE);
   adi_twi_SetBitRate(twi2_dev, TWI2_BIT_RATE);
   adi_twi_SetDutyCycle(twi2_dev, TWI2_DUTY_CYCLE);
+  twi2_busy = 1u;
 };
 
 void Twi2DevAddrSet(uint8_t dev) {
@@ -59,32 +72,50 @@ uint8_t Twi2RegShtRd(uint8_t reg) {
 	return read_val;
 };
 
-// Memory msbf only for ad2428 peripheral init with less than 32 bits register.
+/* Register address is MSB-first on the wire. Address and payload must be
+ * one I2C write: START + addr(W) + reg bytes + data + STOP.
+ * A repeated start between them begins a new addressed write, so the slave
+ * treats payload[0] as a register address. */
+#define TWI2_LNG_PAYLOAD_MAX  (128u)
+
 void Twi2DevRegLngWr(uint8_t dev, uint32_t reg, uint8_t reg_len, uint8_t* val,
                      uint16_t val_len) {
-  uint8_t seq[4];
+  uint8_t seq[4u + TWI2_LNG_PAYLOAD_MAX];
+  uint16_t i;
+  uint16_t n;
 
-  if (reg_len == 1) {
-      seq[0] = reg & 0xFF;
-  }
-  else if (reg_len == 2) {
-      seq[0] = ((reg >> 8) & 0xFF);
-      seq[1] = reg & 0xFF;
-  }
-  else if (reg_len == 4) {
-      seq[0] = ((reg >> 24) & 0xFF);
-      seq[1] = ((reg >> 16) & 0xFF);
-      seq[2] = ((reg >> 8) & 0xFF);
-      seq[3] = reg & 0xFF;
-  }
-  else {
+  if (reg_len != 1u && reg_len != 2u && reg_len != 4u) {
     return;
   }
+  if (val == NULL ||
+      ((uint32_t)reg_len + (uint32_t)val_len) > (uint32_t)sizeof(seq)) {
+    return;
+  }
+  if (reg_len == 1u) {
+    seq[0] = (uint8_t)(reg & 0xFFu);
+  }
+  else if (reg_len == 2u) {
+    seq[0] = (uint8_t)((reg >> 8) & 0xFFu);
+    seq[1] = (uint8_t)(reg & 0xFFu);
+  }
+  else {
+    seq[0] = (uint8_t)((reg >> 24) & 0xFFu);
+    seq[1] = (uint8_t)((reg >> 16) & 0xFFu);
+    seq[2] = (uint8_t)((reg >> 8) & 0xFFu);
+    seq[3] = (uint8_t)(reg & 0xFFu);
+  }
+  for (i = 0u; i < val_len; ++i) {
+    seq[reg_len + i] = val[i];
+  }
+  n = (uint16_t)((uint16_t)reg_len + val_len);
   adi_twi_SetHardwareAddress(twi2_dev, dev);
-  adi_twi_Write(twi2_dev, seq, reg_len, true);
-  adi_twi_Write(twi2_dev, val, val_len, false);
+  adi_twi_Write(twi2_dev, seq, n, false);
 };
 
 void Twi2Stop(void) {
+  if (!twi2_busy) {
+    return;
+  }
   adi_twi_Close(twi2_dev);
+  twi2_busy = 0u;
 };

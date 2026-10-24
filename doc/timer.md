@@ -19,7 +19,7 @@ sequenceDiagram
 
 ### 2. Driver configuration
 
-`TMR0_1MS = 125000`, sysclk, continuous mode, period interrupt.
+`TMR0_1MS = 125000`, sysclk, continuous mode, period interrupt. `Tmr0Init` calls `adi_tmr_Config` before `adi_tmr_Enable`.
 
 ### 3. Pitfalls
 
@@ -36,7 +36,7 @@ Wrong SCLK → wrong period; disabling timer stalls UART RX; keep ISR lightweigh
 
 ### 1. 代码实现
 
-**音频链位置：** `Tmr0Init()` 在 `Spu0Init` 之后、`Uart0Init` 之后（当前 `AudioFlowInit`：Spu → Tmr → Uart）— **UART RX 写指针的生产者节拍**。
+**音频链位置：** `Tmr0Init()` 在 `Uart0Init()` 之后（`AudioFlowInit`：Spu → Uart → Tmr）。RX DMA 先启动，1 ms 节拍再调用 `Uart0Poll`。`adi_tmr_Config()` 把 `tmr0_cfg` 写入定时器后才 `Enable`。
 
 **公开 API：** `Tmr0Init()`, `Tmr0En()`, `Tmr0Close()`（`timer.h`）。
 

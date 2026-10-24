@@ -2,7 +2,7 @@
 
 ## English
 
-**Summary:** `AudioFlowInit` brings up SPU, timer, UART, switch, SRU, codecs, AD24280, then SPORT; `AudioProcess` runs on TRU0_INT4 with a demo: **ADC loopback, 1 kHz tone, A2B0 into DAC channels**.
+**Summary:** `AudioFlowInit` brings up SPU, UART, timer, switch, SRU, codecs, AD24280, then SPORT; `AudioProcess` runs on TRU0_INT4 with a demo: **ADC loopback, 1 kHz tone, A2B0 into DAC channels**.
 
 ### 1. Code implementation
 
@@ -14,9 +14,9 @@
 
 ```mermaid
 flowchart TD
-  A[Spu0Init] --> B[Tmr0Init]
-  B --> C[Uart0Init]
-  C --> D[Sw0Init]
+  A[Spu0Init] --> C[Uart0Init]
+  C --> B[Tmr0Init]
+  B --> D[Sw0Init]
   D --> E[SruInit]
   E --> F[Adau19620Init]
   F --> G[Adau19790Init]
@@ -82,9 +82,9 @@ No register table here — behavior is entirely code-defined:
 
 ```mermaid
 flowchart TD
-  A[Spu0Init] --> B[Tmr0Init]
-  B --> C[Uart0Init]
-  C --> D[Sw0Init]
+  A[Spu0Init] --> C[Uart0Init]
+  C --> B[Tmr0Init]
+  B --> D[Sw0Init]
   D --> E[SruInit]
   E --> F[Adau19620Init]
   F --> G[Adau19790Init]
@@ -97,7 +97,7 @@ flowchart TD
 | 步骤 | 原因简述 |
 |------|----------|
 | SPU | DMA 主控权限 |
-| TMR + UART | 早期日志与 RX poll |
+| UART 然后 TMR | RX DMA 先于 1 ms `Uart0Poll`；`adi_tmr_Config` 后才 Enable |
 | Switch | I2C 路径通 |
 | SRU | DAI 引脚与时钟扇出 |
 | 1962 | **BCLK/FS master** |

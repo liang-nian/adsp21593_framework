@@ -7,7 +7,7 @@
 
 #include "sport.h"
 #include "audio_flow/audio_flow.h"
-#include "uart/uart.h"
+#include "log/log.h"
 
 #define SP0A_DEV        (0u) // to dac
 #define SP0B_DEV        (0u) // from adc
