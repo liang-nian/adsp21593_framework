@@ -7,7 +7,10 @@
 extern "C" {
 #endif
 
-void Twi2Open(void);
+/* 0: session open. 1: already open, or the controller did not start.
+ * A second Open is rejected so two masters cannot share one handle.
+ */
+uint8_t Twi2Open(void);
 
 void Twi2DevAddrSet(uint8_t dev);
 

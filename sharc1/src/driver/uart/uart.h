@@ -10,7 +10,8 @@ extern "C" {
 void Uart0Poll(void);
 uint8_t Uart0Rd(uint8_t* val);
 uint8_t Uart0Wr(uint8_t* val, uint32_t len);
-void Uart0Init(void);
+/* 0: RX DMA running. 1: open or DMA start failed. */
+uint8_t Uart0Init(void);
 void Uart0Close(void);
 void Uart0Mon(void);
 

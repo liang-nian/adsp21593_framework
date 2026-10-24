@@ -14,8 +14,8 @@
 
 ```mermaid
 flowchart TD
-  A[Spu0Init] --> B[Tmr0Init]
-  B --> C[Uart0Init]
+  A[Spu0Init] --> B[Uart0Init]
+  B --> C[Tmr0Init]
   C --> D[Sw0Init]
   D --> E[SruInit]
   E --> F[Adau19620Init]
@@ -82,8 +82,8 @@ No register table here — behavior is entirely code-defined:
 
 ```mermaid
 flowchart TD
-  A[Spu0Init] --> B[Tmr0Init]
-  B --> C[Uart0Init]
+  A[Spu0Init] --> B[Uart0Init]
+  B --> C[Tmr0Init]
   C --> D[Sw0Init]
   D --> E[SruInit]
   E --> F[Adau19620Init]
@@ -97,7 +97,7 @@ flowchart TD
 | 步骤 | 原因简述 |
 |------|----------|
 | SPU | DMA 主控权限 |
-| TMR + UART | 早期日志与 RX poll |
+| UART 然后 TMR | 先开 RX DMA，再开 1 ms poll |
 | Switch | I2C 路径通 |
 | SRU | DAI 引脚与时钟扇出 |
 | 1962 | **BCLK/FS master** |

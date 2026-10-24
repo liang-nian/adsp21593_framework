@@ -3,7 +3,7 @@
 #include "adau1962_reg.h"
 #include "adau1962.h"
 #include "twi/twi.h"
-#include "uart/uart.h"
+#include "log/log.h"
 
 #define TIME_BND    (0xFFFFu)
 
@@ -21,7 +21,7 @@ static void Adau1962Cfg(uint8_t dev, Adau1962Reg* cfg, uint32_t len) {
   }
 };
 
-static void Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
+static uint8_t Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
   uint32_t delay, i;
   uint8_t val;
 
@@ -35,20 +35,29 @@ static void Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
   }
   delay = 0u;
   val = Twi2RegShtRd(ADAU1962_PLL_CTL_CTRL1);
+  /* PLL_CLK_CTRL1 bit 2 is PLL_LOCK (ADAU1962A datasheet, read-only). */
   while(!((val & 0x4) >> 2)){
     if (delay > TIME_BND) {
       ShtLog("adau1962 pll fail.\n");
-      break;
+      return 1u;
     }
     val = Twi2RegShtRd(ADAU1962_PLL_CTL_CTRL1);
     delay++;
     asm("nop;");
   }
+  return 0u;
 };
 
-void Adau19620Init(void) {
-  Twi2Open();
-  Adau1962Pll(ADAU19620_DEV, adau19620_pll, ADAU19620_PLL_LEN);
-  Adau1962Cfg(ADAU19620_DEV, adau19620_cfg, ADAU19620_CFG_LEN);
+uint8_t Adau19620Init(void) {
+  uint8_t pll_fail;
+
+  if (Twi2Open() != 0u) {
+    return 1u;
+  }
+  pll_fail = Adau1962Pll(ADAU19620_DEV, adau19620_pll, ADAU19620_PLL_LEN);
+  if (pll_fail == 0u) {
+    Adau1962Cfg(ADAU19620_DEV, adau19620_cfg, ADAU19620_CFG_LEN);
+  }
   Twi2Stop();
+  return pll_fail;
 };

@@ -12,6 +12,7 @@
 ADI_TMR_HANDLE tmr0_dev;
 ADI_TMR_CFG_PARAMS tmr0_cfg;
 uint8_t tmr0_mem[ADI_TMR_MEMORY];
+static uint8_t tmr0_open;
 #pragma default_section(ALLDATA)
 
 static void Tmr0Cfg(void) {
@@ -37,17 +38,37 @@ static void Tmr0Callback(void* param, uint32_t event, void* arg) {
 };
 
 void Tmr0Init(void) {
-  adi_tmr_Open (TMR0_DEV, tmr0_mem, ADI_TMR_MEMORY, Tmr0Callback, NULL,
-                &tmr0_dev);
+  if (tmr0_open) {
+    return;
+  }
+  if (adi_tmr_Open(TMR0_DEV, tmr0_mem, ADI_TMR_MEMORY, Tmr0Callback, NULL,
+                   &tmr0_dev) != 0) {
+    return;
+  }
   Tmr0Cfg();
+  /* CCES services/tmr/adi_tmr.h: config is a pointer. Filling tmr0_cfg
+   * without this call leaves the hardware period at its reset value.
+   */
+  if (adi_tmr_Config(tmr0_dev, &tmr0_cfg) != 0) {
+    adi_tmr_Close(tmr0_dev);
+    return;
+  }
+  tmr0_open = 1u;
   adi_tmr_Enable(tmr0_dev, true);
 };
 
 void Tmr0En(uint8_t is_en) {
+  if (!tmr0_open) {
+    return;
+  }
   adi_tmr_Enable(tmr0_dev, is_en);
 };
 
 void Tmr0Close(void) {
+  if (!tmr0_open) {
+    return;
+  }
   adi_tmr_Enable(tmr0_dev, false);
   adi_tmr_Close(tmr0_dev);
+  tmr0_open = 0u;
 };

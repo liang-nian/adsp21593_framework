@@ -7,6 +7,8 @@
 extern "C" {
 #endif
 
+#define AD2428_REG_CONTROL    (0x12u)
+#define AD2428_REG_DISCVRY    (0x13u)
 #define AD2428_REG_INTSTAT    (0x15)
 #define AD2428_REG_INTPND2    (0x1A)
 #define AD2428_REG_NODEADR    (0x01)

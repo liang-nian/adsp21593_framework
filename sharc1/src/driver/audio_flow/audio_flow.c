@@ -12,6 +12,7 @@
 #include "twi/twi.h"
 #include "uart/uart.h"
 #include "timer/timer.h"
+#include "log/log.h"
 
 float Harm1000(void) {
   static float ft = 0.f;
@@ -44,14 +45,23 @@ void AudioProcess(void) {
 };
 
 void AudioFlowInit(void) {
+  uint8_t clk_ok;
+
   Spu0Init();
-  Tmr0Init();
-  Uart0Init();
+  /* UART DMA before the 1 ms poll. The timer ISR calls Uart0Poll. */
+  if (Uart0Init() == 0u) {
+    Tmr0Init();
+  }
   Sw0Init();
   SruInit();
-  Adau19620Init();
+  clk_ok = (uint8_t)(Adau19620Init() == 0u);
+  Ad2428ClkReady(clk_ok);
   Adau19790Init();
   Ad24280Init();
   // Ad24281Init();
-	SpInit();
+  if (clk_ok) {
+    SpInit();
+  } else {
+    ShtLog("sport skip: dac bclk/fs not locked.\n");
+  }
 };

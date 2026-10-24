@@ -3,7 +3,7 @@
 #include "adau1979.h"
 #include "adau1979_reg.h"
 #include "twi/twi.h"
-#include "uart/uart.h"
+#include "log/log.h"
 
 #define TIME_BND    (0xFFFFu)
 
@@ -47,7 +47,9 @@ static void Adau1979Pll(uint8_t dev, Adau1979Reg* pll, uint32_t len) {
 };
 
 void Adau19790Init(void) {
-  Twi2Open();
+  if (Twi2Open() != 0u) {
+    return;
+  }
   Adau1979Pll(ADAU19790_DEV, adau19790_pll, ADAU19790_PLL_LEN);
   Adau1979Cfg(ADAU19790_DEV, adau19790_cfg, ADAU19790_CFG_LEN);
   Twi2Stop();

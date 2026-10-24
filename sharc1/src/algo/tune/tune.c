@@ -1,5 +1,7 @@
 #include <stdint.h>
+#include <string.h>
 
+#include "tune.h"
 #include "uart/uart.h"
 #include "ad2428/ad2428.h"
 #include "sport/sport.h"
@@ -118,8 +120,11 @@ static const uint8_t AucCrcLo[] = {
   0x82, 0x42, 0x43, 0x83, 0x41, 0x81, 0x80, 0x40
 };
 
-static uint8_t ack[] = {0x5A, 0xA5, 0x05, 0x6F, 0x43};
-static uint8_t nack[] = {0x5A, 0xA5, 0x06, 0xFF, 0x76};
+/* CRC16-Modbus of the command byte only (header is not in the CRC).
+ * 0x05 -> 0x437F, 0x06 -> 0x423F, low byte first on the wire.
+ */
+static uint8_t ack[] = {0x5A, 0xA5, 0x05, 0x7F, 0x43};
+static uint8_t nack[] = {0x5A, 0xA5, 0x06, 0x3F, 0x42};
 static uint8_t header[] = {0x5A, 0xA5};
 
 static TuneSt st = {0};
@@ -138,16 +143,16 @@ static inline uint16_t Crc16Update(uint16_t cur_crc, uint8_t byte) {
 
 static ParseSt CmdProc(uint8_t cmd) {
   switch (cmd) {
-    case 0x01:
+    case 0x00:
       return kLen;
+
+    case 0x01:
+      return kCrcLo;
 
     case 0x02:
       return kCrcLo;
 
     case 0x03:
-      return kCrcLo;
-
-    case 0x04:
       return kCrcLo;
 
     default:
@@ -157,19 +162,19 @@ static ParseSt CmdProc(uint8_t cmd) {
 
 static void CrcProc(uint8_t cmd) {
   switch (cmd) {
-    case 0x01:
+    case 0x00:
       st.test_flag = 1;
       break;
 
-    case 0x02:
+    case 0x01:
       st.a2b_mon_flag = 1;
       break;
 
-    case 0x03:
+    case 0x02:
       st.uart_mon_flag = 1;
       break;
 
-    case 0x04:
+    case 0x03:
       st.cpu_load_mon_flag = 1;
       break;
 
@@ -183,6 +188,7 @@ static void CrcProc(uint8_t cmd) {
 // Data op success should copy to flash to save old para ensure won't be destroy
 // by bad rx, once bad rx, reverse to old para so we can get better control.
 static void TuneProc(uint8_t* data) {
+  (void)data;
   if (st.a2b_mon_flag) {
 
   }
@@ -192,7 +198,7 @@ static void TuneProc(uint8_t* data) {
 void TuneRx(uint8_t byte) {
   static ParseSt state = kHeader1;
   static RxPacket packet;
-  static uint8_t payload_idx = 0;
+  static uint16_t payload_idx = 0;
   static uint16_t crc_calc = 0xFFFF;
   static uint8_t crc_rx_low = 0;
 
@@ -224,11 +230,20 @@ void TuneRx(uint8_t byte) {
       packet.len = byte;
       crc_calc = Crc16Update(crc_calc, byte);
       payload_idx = 0;
-      if (packet.len > 0) state = kPayload;
-      else state = kCrcLo;
+      if (packet.len == 0u) {
+        state = kCrcLo;
+      } else if (packet.len > MAX_PAYLOAD_LEN) {
+        state = kHeader1;
+      } else {
+        state = kPayload;
+      }
       break;
 
     case kPayload:
+      if (payload_idx >= MAX_PAYLOAD_LEN || payload_idx >= packet.len) {
+        state = kHeader1;
+        break;
+      }
       packet.payload[payload_idx++] = byte;
       crc_calc = Crc16Update(crc_calc, byte);
 
@@ -249,6 +264,9 @@ void TuneRx(uint8_t byte) {
       if (crc_rx == crc_calc) {
         CrcProc(packet.cmd);
         TuneProc(packet.payload);
+        Uart0Wr(ack, (uint32_t)sizeof(ack));
+      } else {
+        Uart0Wr(nack, (uint32_t)sizeof(nack));
       }
       state = kHeader1;
       break;
@@ -262,18 +280,36 @@ void TuneRx(uint8_t byte) {
 
 void TuneTx(uint8_t cmd, uint8_t* data, uint32_t len) {
   uint32_t i;
-  uint16_t crc16 = 0xFFFF;
+  uint16_t crc16 = 0xFFFFu;
+  uint8_t len8;
+  uint8_t crc_bytes[2];
 
-  Uart0Wr(header, 2);
-  Uart0Wr(&cmd, 1);
+  /* RX accepts a length byte only for command 0x00. Other commands are
+   * header + cmd + crc16, which is also the ack/nack layout.
+   */
+  if (cmd == 0x00u) {
+    if (len > 0xFFu || (len > 0u && data == NULL)) {
+      return;
+    }
+  } else if (len != 0u) {
+    return;
+  }
+
+  Uart0Wr(header, 2u);
+  Uart0Wr(&cmd, 1u);
   crc16 = Crc16Update(crc16, cmd);
-  Uart0Wr(&len, 4);
-  for (i = 0; i < 4; ++i) {
-    crc16 = Crc16Update(crc16, (uint8_t*)(&len) + i);
+  if (cmd == 0x00u) {
+    len8 = (uint8_t)len;
+    Uart0Wr(&len8, 1u);
+    crc16 = Crc16Update(crc16, len8);
+    if (len > 0u) {
+      Uart0Wr(data, len);
+      for (i = 0u; i < len; ++i) {
+        crc16 = Crc16Update(crc16, data[i]);
+      }
+    }
   }
-  Uart0Wr(data, len);
-  for (i = 0; i < len; ++i) {
-    crc16 = Crc16Update(crc16, data[i]);
-  }
-  Uart0Wr(&crc16, 2);
+  crc_bytes[0] = (uint8_t)(crc16 & 0xFFu);
+  crc_bytes[1] = (uint8_t)((crc16 >> 8u) & 0xFFu);
+  Uart0Wr(crc_bytes, 2u);
 };

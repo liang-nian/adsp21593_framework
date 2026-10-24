@@ -31,6 +31,7 @@ ADI_CACHE_ALIGN static ADI_PDMA_DESC_LIST  uart0_rx_desc;
 static uint8_t uart0_mem[ADI_UART_BIDIR_MEMORY_SIZE];
 
 static ADI_UART_HANDLE uart0_dev;
+static uint8_t uart0_ready;
 
 ADI_CACHE_ALIGN volatile static UartDmaMsg uart0_msg = {
     .underrun_cnt = 0u,
@@ -66,26 +67,69 @@ static void Uart0Callback(void* param, uint32_t event, void* arg) {
   if(event == (uint32_t)ADI_UART_EVENT_RX_PROCESSED) {}
 };
 
+/* Writer index is the next DMA store. rd == wr means empty, so a lap that
+ * lands back on rd cannot be told from idle and is counted as an overrun.
+ */
+static uint8_t UartRxLapped(uint32_t old_wr, uint32_t rd, uint32_t cur) {
+  uint32_t wrote;
+  uint32_t until_rd;
+
+  if (old_wr >= DMA_LEN || rd >= DMA_LEN || cur >= DMA_LEN) {
+    return 0u;
+  }
+  if (cur >= old_wr) {
+    wrote = cur - old_wr;
+  } else {
+    wrote = (DMA_LEN - old_wr) + cur;
+  }
+  if (wrote == 0u) {
+    return 0u;
+  }
+  if (rd == old_wr) {
+    until_rd = DMA_LEN;
+  } else if (rd > old_wr) {
+    until_rd = rd - old_wr;
+  } else {
+    until_rd = (DMA_LEN - old_wr) + rd;
+  }
+  return (wrote >= until_rd) ? 1u : 0u;
+};
+
 void Uart0Poll(void) {
-  uint32_t cur_wr_idx = UART0_RX_DMA_CUR_XCNT;
-  uint32_t rd_idx = uart0_msg.rx_rd_idx;
-  uint8_t is_overrun = 0u;
-  cur_wr_idx = DMA_LEN - cur_wr_idx;
-  is_overrun |= (uart0_msg.rx_wr_idx < rd_idx &&
-                cur_wr_idx > rd_idx);
-  is_overrun |= (uart0_msg.rx_wr_idx < rd_idx &&
-                cur_wr_idx < uart0_msg.rx_wr_idx);
-  is_overrun |= (uart0_msg.rx_wr_idx >= rd_idx &&
-                cur_wr_idx >= uart0_msg.rx_wr_idx &&
-                cur_wr_idx < uart0_msg.rx_wr_idx);
-  uart0_msg.overrun_cnt += is_overrun;
-  uart0_msg.rx_wr_idx =  cur_wr_idx;
+  uint32_t xcnt;
+  uint32_t cur_wr_idx;
+  uint32_t old_wr;
+  uint32_t rd_idx;
+
+  if (!uart0_ready) {
+    return;
+  }
+  xcnt = UART0_RX_DMA_CUR_XCNT;
+  /* XCNT is the remaining count. 0 is the reload point (index wrapped to 0).
+   * A count above DMA_LEN is not a live descriptor.
+   */
+  if (xcnt > DMA_LEN) {
+    return;
+  }
+  cur_wr_idx = (xcnt == 0u) ? 0u : (DMA_LEN - xcnt);
+  old_wr = uart0_msg.rx_wr_idx;
+  rd_idx = uart0_msg.rx_rd_idx;
+  if (old_wr >= DMA_LEN) {
+    old_wr = 0u;
+  }
+  uart0_msg.overrun_cnt += UartRxLapped(old_wr, rd_idx, cur_wr_idx);
+  uart0_msg.rx_wr_idx = cur_wr_idx;
 };
 
 uint8_t Uart0Rd(uint8_t* val) {
   uint32_t wr_idx = uart0_msg.rx_wr_idx;
+  if (val == NULL) {
+    return 1u;
+  }
+  /* Empty is the normal poll result. MonTmp spins on it; do not count that
+   * as a ring underrun. Overrun is the DMA lap detected in Uart0Poll.
+   */
   if (uart0_msg.rx_rd_idx == wr_idx) {
-    uart0_msg.underrun_cnt += 1u;
     return 1u;
   }
   *val = uart0_rx_buf[uart0_msg.rx_rd_idx];
@@ -97,55 +141,72 @@ uint8_t Uart0Rd(uint8_t* val) {
 };
 
 uint8_t Uart0Wr(uint8_t* val, uint32_t len) {
-  uint32_t timer = TIME_BND;
-  while (len > DMA_LEN) {
+  if (!uart0_ready || val == NULL) {
+    return 1u;
+  }
+  if (len == 0u) {
+    return 0u;
+  }
+  while (len > 0u) {
+    uint32_t timer = TIME_BND;
+    uint32_t chunk = (len > DMA_LEN) ? DMA_LEN : len;
     while (!uart0_msg.is_tx_over) {
-      timer--;
-      if (!timer) {
+      if (timer-- == 0u) {
         return 1u;
       }
     }
     uart0_msg.is_tx_over = 0u;
-    memcpy(uart0_tx_buf, val, DMA_LEN);
-    uart0_tx_desc.XCount = DMA_LEN;
-    adi_uart_DMAWrite(uart0_dev, &uart0_tx_desc, 1, ADI_PDMA_STOP_MODE);
-    len -= DMA_LEN;
-    val += DMA_LEN;
-  }
-  while (!uart0_msg.is_tx_over) {
-    timer--;
-    if (!timer) {
+    memcpy(uart0_tx_buf, val, chunk);
+    uart0_tx_desc.XCount = chunk;
+    if (adi_uart_DMAWrite(uart0_dev, &uart0_tx_desc, 1, ADI_PDMA_STOP_MODE) != 0) {
+      uart0_msg.is_tx_over = 1u;
       return 1u;
     }
+    len -= chunk;
+    val += chunk;
   }
-  uart0_msg.is_tx_over = 0u;
-  memcpy(uart0_tx_buf, val, len);
-  uart0_tx_desc.XCount = len;
-  adi_uart_DMAWrite(uart0_dev, &uart0_tx_desc, 1, ADI_PDMA_STOP_MODE);
   return 0u;
 };
 
-void Uart0Init(void) {
-    adi_uart_Open(UART0_DEV, ADI_UART_DIR_BIDIRECTION, uart0_mem,
-                  ADI_UART_BIDIR_MEMORY_SIZE, &uart0_dev);
-    adi_uart_ConfigBaudRate(uart0_dev, UART0_PRESCALE, UART0_DIV);
-    adi_uart_RegisterCallback(uart0_dev, Uart0Callback, NULL);
-    PrepareDesc();
-    adi_uart_DMARead(uart0_dev, &uart0_rx_desc, 1u, ADI_PDMA_DESCRIPTOR_LIST);
+uint8_t Uart0Init(void) {
+  if (uart0_ready) {
+    return 0u;
+  }
+  if (adi_uart_Open(UART0_DEV, ADI_UART_DIR_BIDIRECTION, uart0_mem,
+                    ADI_UART_BIDIR_MEMORY_SIZE, &uart0_dev) != 0) {
+    return 1u;
+  }
+  if (adi_uart_ConfigBaudRate(uart0_dev, UART0_PRESCALE, UART0_DIV) != 0 ||
+      adi_uart_RegisterCallback(uart0_dev, Uart0Callback, NULL) != 0) {
+    adi_uart_Close(uart0_dev);
+    return 1u;
+  }
+  PrepareDesc();
+  if (adi_uart_DMARead(uart0_dev, &uart0_rx_desc, 1u,
+                       ADI_PDMA_DESCRIPTOR_LIST) != 0) {
+    adi_uart_Close(uart0_dev);
+    return 1u;
+  }
+  uart0_ready = 1u;
+  return 0u;
 };
 
 void Uart0Close(void) {
+  if (!uart0_ready) {
+    return;
+  }
   adi_uart_Close(uart0_dev);
+  uart0_ready = 0u;
 };
 
 void Uart0Mon(void) {
   char msg[32];
   uint32_t len;
 
-  len = snprintf(msg, sizeof(msg), "underrun cnt: %d.\n",
+  len = snprintf(msg, sizeof(msg), "underrun cnt: %u.\n",
         uart0_msg.underrun_cnt);
   Uart0Wr((uint8_t*)msg, len);
-  len = snprintf(msg, sizeof(msg), "overrun cnt: %d.\n",
+  len = snprintf(msg, sizeof(msg), "overrun cnt: %u.\n",
         uart0_msg.overrun_cnt);
   Uart0Wr((uint8_t*)msg, len);
 };
