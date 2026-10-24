@@ -62,7 +62,7 @@ It is **not** a product SDK and is **not** affiliated with any automotive OEM or
 framework/
 ├── sharc1/          # Core 1 (drivers + audio flow)
 ├── sharc2/          # Core 2
-├── doc/             # Driver study notes (CN + EN) — tracked in git
+├── doc/             # adsp21593_framework.md and bugs.md
 ├── .gitignore
 ├── LICENSE
 └── README.md
@@ -78,68 +78,12 @@ Intended for **CrossCore Embedded Studio (CCES)** / Analog Devices SHARC toolcha
 
 ### How to read the notes
 
-Each topic is **one bilingual file** under [`doc/`](doc/): **`## English`**, then **`---`**, then **`## 中文`**.
+Two files under [`doc/`](doc/):
 
-**Convention:** every driver note uses three subsections in each language:
-
-1. **代码实现 / Code implementation** — place in the audio chain, public API, call graph, init order, data flow.
-2. **驱动配置 / Driver configuration** — registers, macros, clock parameters, pins, baud rates (values from code where possible).
-3. **踩坑记录 / Pitfalls** — pitfalls, bring-up experience, engineering tips.
-
-**Read [doc/tdm_i2s.md](doc/tdm_i2s.md) first** for shared TDM/I2S timing; other drivers link there instead of repeating theory.
-
-### Documentation index
-
-| Topic | File | Summary |
-|-------|------|---------|
-| **Shared audio timing** | [doc/tdm_i2s.md](doc/tdm_i2s.md) | TDM16 / 32-bit slot / master-slave / buffers |
-| Hardware overview | [doc/hardware.md](doc/hardware.md) | Board, EZKIT, signal topology |
-| End-to-end bring-up | [doc/audio_flow.md](doc/audio_flow.md) | `AudioFlowInit` order & demo DSP |
-| SPORT DMA | [doc/sport.md](doc/sport.md) | Ping-pong DMA; **SP1B clock stagger trick** |
-| SRU routing | [doc/sru.md](doc/sru.md) | DAI pins, BCLK/FS fan-out |
-| SPU secure masters | [doc/spu.md](doc/spu.md) | SPORT/UART DMA IDs |
-| TWI (I2C) | [doc/twi.md](doc/twi.md) | 100 kHz; **per-driver Open/Stop isolation** |
-| Board switch (U6) | [doc/switch.md](doc/switch.md) | Codec enable / reset @ 0x22 |
-| TMR0 1 ms tick | [doc/timer.md](doc/timer.md) | → `Uart0Poll` |
-| UART log | [doc/uart.md](doc/uart.md) | 921600; **RX/TX polling model** |
-| ADAU1962 DAC | [doc/adau1962.md](doc/adau1962.md) | I2C 0x04, clock **master** |
-| ADAU1979 ADC | [doc/adau1979.md](doc/adau1979.md) | I2C 0x11, SAI **slave** |
-| AD2428 A2B | [doc/ad2428.md](doc/ad2428.md) | SigmaStudio export / **USBi needs clocks & free TWI** |
-| Architecture, protocols, A2B load order | [doc/engineering_notes.md](doc/engineering_notes.md) | Cores, bus fields, SigmaStudio script, USBi order |
-| Verified defects | [doc/bugs.md](doc/bugs.md) | Bugs fixed on this tree, and the build attempt |
-
-### Dependency sketch
-
-```mermaid
-flowchart TB
-  README[README.md]
-  TDM[tdm_i2s.md]
-  AF[audio_flow.md]
-  SP[sport.md]
-  SRU[sru.md]
-  SPU[spu.md]
-  TWI[twi.md]
-  SW[switch.md]
-  TMR[timer.md]
-  UART[uart.md]
-  DAC[adau1962.md]
-  ADC[adau1979.md]
-  A2B[ad2428.md]
-  HW[hardware.md]
-  README --> TDM
-  README --> AF
-  README --> HW
-  AF --> SPU --> TMR --> UART --> SW --> SRU --> DAC --> ADC --> A2B --> SP
-  DAC --> TDM
-  ADC --> TDM
-  A2B --> TDM
-  SP --> TDM
-  SP --> SRU
-  DAC --> TWI
-  ADC --> TWI
-  A2B --> TWI
-  SW --> TWI
-```
+| File | What it is |
+|------|------------|
+| [doc/adsp21593_framework.md](doc/adsp21593_framework.md) | Architecture (routing in detail), then each driver as protocol / ADSP API / this tree's settings, then bring-up notes. Body is Chinese. |
+| [doc/bugs.md](doc/bugs.md) | Defects that were verified and fixed. |
 
 ### Board reality check
 
@@ -196,7 +140,7 @@ Defined in `sport.h`:
 | **SHARC1** (`sharc1/`) | 主应用核：音频 I/O、驱动、主循环 |
 | **SHARC2** (`sharc2/`) | 副核（当前为最小桩） |
 
-版本 0.0 已支持驱动：**ADAU1979**（ADC）、**ADAU1962**（DAC）、**AD2428**（A2B）、**SPORT**、**TWI**、**UART**、**SRU**、**SPU**、**switch**、**timer** — 详见上表 English 节或各 [`doc/*.md`](doc/)。
+版本 0.0 已支持驱动：**ADAU1979**（ADC）、**ADAU1962**（DAC）、**AD2428**（A2B）、**SPORT**、**TWI**、**UART**、**SRU**、**SPU**、**switch**、**timer**。说明见 [doc/adsp21593_framework.md](doc/adsp21593_framework.md)。
 
 ### 工程结构
 
@@ -204,7 +148,7 @@ Defined in `sport.h`:
 framework/
 ├── sharc1/
 ├── sharc2/
-├── doc/             # 驱动学习笔记（中英）— 纳入版本管理
+├── doc/             # adsp21593_framework.md 与 bugs.md
 ├── LICENSE
 └── README.md
 ```
@@ -215,15 +159,7 @@ framework/
 
 ### 阅读方式
 
-每个主题在 [`doc/`](doc/) 下**一个双语文件**：先 **`## English`**，再 **`---`**，再 **`## 中文`**。
-
-**约定：** 每个驱动笔记在每种语言下分三节：**1 代码实现** · **2 驱动配置** · **3 踩坑记录**。
-
-**请先读 [doc/tdm_i2s.md](doc/tdm_i2s.md)**；各驱动通过链接引用共享时序说明。
-
-### 笔记索引
-
-与 English 节「Documentation index」相同，并增加 [engineering_notes](doc/engineering_notes.md)、[bugs](doc/bugs.md)。
+[`doc/`](doc/) 下只留两篇：[adsp21593_framework.md](doc/adsp21593_framework.md)（架构与路由、各驱动的协议 / ADSP 接口 / 本工程配置、补充经验）、[bugs.md](doc/bugs.md)（已核实缺陷）。
 
 ### 评估板说明
 

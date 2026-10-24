@@ -1,4 +1,5 @@
 #include <drivers/twi/adi_twi.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "twi.h"

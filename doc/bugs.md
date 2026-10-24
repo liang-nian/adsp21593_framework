@@ -10,7 +10,7 @@ Review scope: `sharc1/` and `sharc2/` application sources, generated pinmux / `a
 
 ## English
 
-Fifteen firmware defects were fixed. One note (`doc/sport.md`) mis-named a SPORT argument; the calls themselves were already right and were not edited. The ADI SHARC toolchain is not on this machine, so the tree was not cross-compiled. Host `gcc` only checked the portable `ShtLog` truncation path.
+Fifteen firmware defects were fixed. One note mis-named a SPORT argument; the calls themselves were already right and were not edited. The ADI SHARC toolchain is not on this machine, so the tree was not cross-compiled. Host `gcc` only checked the portable `ShtLog` truncation path.
 
 ### Fixed
 
@@ -20,7 +20,7 @@ Fifteen firmware defects were fixed. One note (`doc/sport.md`) mis-named a SPORT
 | 2 | `audio_flow.c` `AudioFlowInit` | TMR0 was started before UART0 RX DMA. Once the timer is actually configured, the ISR would poll DMA that is not armed yet. | Order is now SPU, UART, TMR, switch, SRU, DAC, ADC, A2B, SPORT. |
 | 3 | `uart.c` `Uart0Poll` | `UART0_RXDMA_XCNT_CUR` is not a symbol in this tree. UART0 RX on ADSP-21593 is DMA channel 21. | Read `*pREG_DMA21_XCNT_CUR` from `<sys/platform.h>`. |
 | 4 | `uart.c` `Uart0Poll` | `XCNT_CUR` is transfers still remaining. A read of 0 produced write index `DMA_LEN` (512), one past the buffer. | Clamp, then map `DMA_LEN` to index 0. |
-| 5 | `uart.c` `Uart0Poll` | The wrap case required `cur >= old && cur < old`, which is impossible, so a write pointer that wrapped past the reader never incremented `overrun_cnt`. Landing on the reader (full buffer, which aliases empty) was also ignored. | Count overrun when the writer passes or lands on the reader, including the wrap. A full lap that lands back on the old index is still invisible; that limit is documented in `doc/uart.md`. |
+| 5 | `uart.c` `Uart0Poll` | The wrap case required `cur >= old && cur < old`, which is impossible, so a write pointer that wrapped past the reader never incremented `overrun_cnt`. Landing on the reader (full buffer, which aliases empty) was also ignored. | Count overrun when the writer passes or lands on the reader, including the wrap. A full lap that lands back on the old index is still invisible; that limit is documented in `doc/adsp21593_framework.md`. |
 | 6 | `uart.c` `Uart0Wr` | `len == 0`, a NULL pointer, or a length that is an exact multiple of 512 queued a DMA with `XCount == 0`. That completion interrupt never arrives, so `is_tx_over` stayed 0 and later writes timed out. | Reject NULL / zero. After the chunk loop, return when nothing remains. Each wait reloads its own timeout. |
 | 7 | `log.c` `ShtLog` | No `<stdarg.h>` / `<stdio.h>`, so `va_list` and `vsnprintf` were undeclared. `if (len > 128)` is off by one: `vsnprintf` returns `>= sizeof(msg)` when it truncates, and that count walks off the 128-byte buffer. | Include `<stdarg.h>`, `<stddef.h>`, `<stdio.h>`. Send at most 127 bytes. Negative or empty results send nothing. |
 | 8 | `ad2428.c`, `adau1962.c`, `adau1979.c`, `sport.c` | They call variadic `ShtLog` but included `uart.h`, which does not prototype it. | Include `log/log.h`. |
@@ -32,12 +32,12 @@ Fifteen firmware defects were fixed. One note (`doc/sport.md`) mis-named a SPORT
 | 14 | `tune.c` `TuneTx`, `tune.h` | `TuneTx` sent a 4-byte length and took the CRC’s address. `TuneRx` accepts a 1-byte length only for command `0x01`, and no length for `0x02` / `0x03` / `0x04`. `tune.c` called `memset` without `<string.h>`. `tune.h` had no prototypes. | `0x01` sends one length byte (reject `len > 255`). Other commands send header + cmd + CRC only. CRC bytes are explicit little-endian. Prototypes added. `TuneRx` is still not called from `MonTmp` (unfinished; see `todo.md`). |
 | 15 | `switch.c` `SwCfg` | Unused `uint8_t res`. | Removed. |
 
-`doc/adau1979.md`, `doc/audio_flow.md`, `doc/hardware.md`, `doc/timer.md`, `doc/uart.md`, and `doc/sport.md` were updated so they match the code above. `sport.md` had called the 4th `adi_sport_ConfigClock` argument InternalClock. The SHARC argument order is `(h, nClockRatio, bUseIntlClk, bRisingEdge, bGatedClk)`. Every half-SPORT already passes `bUseIntlClk = false`. The SP1B `true` is the rising-edge stagger and was not changed.
+Driver notes that used to live next to this file were merged into `doc/adsp21593_framework.md`. An older sport note had called the 4th `adi_sport_ConfigClock` argument InternalClock. In CCES 3.0.3 `adi_sport_2156x.h` the order is `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`. Every half-SPORT already passes `bUseIntlClock = false`. The SP1B `true` selects the falling edge and was not changed.
 
 ### Inspected and left as-is
 
 - `adi_core_enable(ADI_CORE_SHARC1)` in `sharc1.c` is the CCES template: Core 1 enables Core 2. `ADI_CORE_SHARC1` is the second SHARC.
-- SP1B `bRisingEdge = true` against SP1A `false` is the intentional setup/hold stagger. Do not retune it from this review.
+- SP1B `bFallingEdge = true` against SP1A `false` is the intentional setup/hold stagger. Do not retune it from this review.
 - `AD24281` is an empty stub. The official eval board has one A2B master. `Ad24281Init` stays commented out.
 - SPU IDs 63–68 (SPORT), 29 (UART0), 79/80 (UART0 RX/TX DMA) match the EZ-KIT examples.
 - ADAU1962 `DAC_CTRL0 = 0x20` (TDM16, 48 kHz), `DAC_CTRL1 = 0x43`, `DAC_CTRL2 = 0x00`, PLL lock on `PLL_CLK_CTRL1` bit 2, final `PLL_CLK_CTRL0 = 0x05` (512×fs, matching 24.576 MHz `AUDIO_CLK`).
@@ -45,8 +45,8 @@ Fifteen firmware defects were fixed. One note (`doc/sport.md`) mis-named a SPORT
 - Switch programs the GPIO latch before `IODIR`, then releases active-low reset. That order avoids a glitch when the pins become outputs.
 - A2B `i == 1` polls `MSTR_RUNNING` (INTTYPE 255). A DELAY whose previous register is `0x13` polls `DSCDONE` (INTTYPE 24). Both match this 829-entry table: the first DELAY is index 1, and every `DISCVRY` is followed by a DELAY.
 - `val_width > 1` returns immediately. All 829 entries have width 1 and length 1, so this is a fail-fast, not a live bug.
-- `Uart0Rd` increments `underrun_cnt` on an empty buffer. `MonTmp` loops until empty, so the counter includes idle polls. `doc/uart.md` already describes that.
-- CPU load `cnt / 1000.f` is a relative unit, as `doc/sport.md` says.
+- `Uart0Rd` increments `underrun_cnt` on an empty buffer. `MonTmp` loops until empty, so the counter includes idle polls. `doc/adsp21593_framework.md` describes that.
+- CPU load `cnt / 1000.f` is a relative unit, as `doc/adsp21593_framework.md` says.
 - `ack[]` / `nack[]` in `tune.c` are unused. CRC16 of command `0x05` is not `0x436F`. The intended payload is unknown, so the constants were not rewritten.
 - No SPI driver. Pinmux only claims TWI2 and UART0. DAI audio is the SRU, not `PORT` mux. No `adi_pwr_Init` in this tree; clocks are reset defaults plus the codec PLL.
 - UART divisor 136 at the 125 MHz SCLK assumed by `timer.c` is 125e6/136 ≈ 919118 baud, about 0.27% below 921600. That is the nearest integer divisor, not a defect.
@@ -77,7 +77,7 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 
 ## 中文
 
-固件里核实并改掉 15 处。`doc/sport.md` 把 `adi_sport_ConfigClock` 的第 4 参写成了 InternalClock，调用本身是对的，没有改沿。本机没有 ADI SHARC 工具链，没有做交叉编译。主机 `gcc` 只复现了 `ShtLog` 截断。
+固件里核实并改掉 15 处。旧的 sport 笔记把 `adi_sport_ConfigClock` 的第 4 参写成了 InternalClock，调用本身是对的，没有改沿。本机没有 ADI SHARC 工具链，没有做交叉编译。主机 `gcc` 只复现了 `ShtLog` 截断。
 
 ### 已修复
 
@@ -87,7 +87,7 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 | 2 | `audio_flow.c` `AudioFlowInit` | TMR0 早于 UART0 RX DMA。定时器一旦真的按 1 ms 跑，ISR 会去读还没武装的 DMA。 | 顺序改为 SPU → UART → TMR → switch → SRU → DAC → ADC → A2B → SPORT。 |
 | 3 | `uart.c` `Uart0Poll` | `UART0_RXDMA_XCNT_CUR` 在本工程不是符号。ADSP-21593 上 UART0 RX 是 DMA21。 | 读 `*pREG_DMA21_XCNT_CUR`。 |
 | 4 | `uart.c` `Uart0Poll` | `XCNT_CUR` 是剩余传输个数。读到 0 时写指针变成 `DMA_LEN`（512），越界。 | 钳位后把 `DMA_LEN` 映射为下标 0。 |
-| 5 | `uart.c` `Uart0Poll` | 回绕分支写成 `cur >= old && cur < old`，恒假，写指针绕过读指针时 `overrun_cnt` 不增加。写指针落在读指针上（满缓冲与空缓冲是同一个条件）也没计数。 | 越过或落在读指针上，包括回绕，都计 overrun。整圈后停在旧下标仍然看不出来，`doc/uart.md` 写了这个限制。 |
+| 5 | `uart.c` `Uart0Poll` | 回绕分支写成 `cur >= old && cur < old`，恒假，写指针绕过读指针时 `overrun_cnt` 不增加。写指针落在读指针上（满缓冲与空缓冲是同一个条件）也没计数。 | 越过或落在读指针上，包括回绕，都计 overrun。整圈后停在旧下标仍然看不出来，`doc/adsp21593_framework.md` 写了这个限制。 |
 | 6 | `uart.c` `Uart0Wr` | `len == 0`、空指针，或长度刚好是 512 的整数倍时，会提交 `XCount == 0` 的 DMA。完成中断不来，`is_tx_over` 停在 0，后面的写全部超时。 | 拒绝空指针和 0 长度。分块发完就返回。每次等待各自重装超时。 |
 | 7 | `log.c` `ShtLog` | 没有 `<stdarg.h>` / `<stdio.h>`，`va_list` 和 `vsnprintf` 未声明。`if (len > 128)` 差 1：截断时返回值 `>= sizeof(msg)`，按这个长度发送会读出 128 字节缓冲。 | 补上头文件。最多发送 127 字节。返回值 ≤ 0 不发送。 |
 | 8 | `ad2428.c`、`adau1962.c`、`adau1979.c`、`sport.c` | 调用可变参数 `ShtLog`，包含的却是没有原型的 `uart.h`。 | 改为 `log/log.h`。 |
@@ -99,12 +99,12 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 | 14 | `tune.c` `TuneTx`、`tune.h` | `TuneTx` 发送 4 字节长度，并把 CRC 的地址交给 `Uart0Wr`。`TuneRx` 只给命令 `0x01` 收 1 字节长度，`0x02` / `0x03` / `0x04` 没有长度。`memset` 没有 `<string.h>`。`tune.h` 没有原型。 | `0x01` 发 1 字节长度（`len > 255` 拒绝）。其它命令只发帧头 + cmd + CRC。CRC 按小端拆成两个字节。补上原型。`TuneRx` 仍未接到 `MonTmp`（`todo.md` 里的未完成项）。 |
 | 15 | `switch.c` `SwCfg` | 未使用的 `uint8_t res`。 | 删除。 |
 
-`doc/adau1979.md`、`doc/audio_flow.md`、`doc/hardware.md`、`doc/timer.md`、`doc/uart.md`、`doc/sport.md` 已按上述代码改过。`sport.md` 把第 4 参标成 InternalClock。SHARC 的参数顺序是 `(h, nClockRatio, bUseIntlClk, bRisingEdge, bGatedClk)`。六路半 SPORT 的 `bUseIntlClk` 本来就是 `false`。SP1B 的 `true` 是上升沿错开，没有改。
+原先分散的驱动笔记已并入 `doc/adsp21593_framework.md`。旧笔记把第 4 参标成 InternalClock。CCES 3.0.3 的 `adi_sport_2156x.h` 顺序是 `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`。六路半 SPORT 的 `bUseIntlClock` 本来就是 `false`。SP1B 的 `true` 是下降沿，没有改。
 
 ### 看过但没有改
 
 - `sharc1.c` 里的 `adi_core_enable(ADI_CORE_SHARC1)` 是 CCES 模板：Core 1 打开 Core 2。`ADI_CORE_SHARC1` 是第二颗 SHARC。
-- SP1B `bRisingEdge = true`、SP1A 为 `false`，是有意的建立/保持时间错开。这次审查不去改沿。
+- SP1B `bFallingEdge = true`、SP1A 为 `false`，是有意的建立/保持时间错开。这次审查不去改沿。
 - `AD24281` 是空桩。官方评估板只有一路 A2B 主节点。`Ad24281Init` 保持注释。
 - SPU 编号 63–68（SPORT）、29（UART0）、79/80（UART0 RX/TX DMA）与 EZ-KIT 例程一致。
 - ADAU1962：`DAC_CTRL0 = 0x20`（TDM16、48 kHz），`DAC_CTRL1 = 0x43`，`DAC_CTRL2 = 0x00`，锁相在 `PLL_CLK_CTRL1` bit 2，最终 `PLL_CLK_CTRL0 = 0x05`（512×fs，对应 24.576 MHz `AUDIO_CLK`）。
@@ -112,8 +112,8 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 - switch 先写 GPIO 锁存再写 `IODIR`，然后释放低有效复位。方向从输入变成输出时这样不会毛刺。
 - A2B 在 `i == 1` 轮询 `MSTR_RUNNING`（INTTYPE 255）。前一条寄存器是 `0x13` 的 DELAY 轮询 `DSCDONE`（INTTYPE 24）。这张 829 条表的第一条 DELAY 就在下标 1，每次 `DISCVRY` 后面都跟着 DELAY。
 - `val_width > 1` 会立刻返回。829 条的宽度和长度都是 1，这是失败即停，不是当前表上的缺陷。
-- `Uart0Rd` 在缓冲空时增加 `underrun_cnt`。`MonTmp` 一直读到空，所以计数包含空闲轮询。`doc/uart.md` 已经这样写。
-- CPU 负载 `cnt / 1000.f` 是相对单位，`doc/sport.md` 已说明。
+- `Uart0Rd` 在缓冲空时增加 `underrun_cnt`。`MonTmp` 一直读到空，所以计数包含空闲轮询。`doc/adsp21593_framework.md` 已经这样写。
+- CPU 负载 `cnt / 1000.f` 是相对单位，`doc/adsp21593_framework.md` 已说明。
 - `tune.c` 的 `ack[]` / `nack[]` 没有被使用。命令 `0x05` 的 CRC16 不是 `0x436F`。想发的负载不清楚，所以没有改这两个常量。
 - 没有 SPI 驱动。管脚复用只声明了 TWI2 和 UART0。音频走 SRU，不走 `PORT` 复用。工程里没有 `adi_pwr_Init`；时钟是复位默认值加上 codec PLL。
 - `timer.c` 按 SCLK 125 MHz 估算时，除数 136 得到 125e6/136 ≈ 919118 baud，比 921600 低约 0.27%。这是最近的整数除数，不是缺陷。

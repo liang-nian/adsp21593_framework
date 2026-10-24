@@ -1,6 +1,13 @@
 # Build / IDE artifacts
 Debug/
+Release/
 .DS_Store
+
+# CCES headless build logs
+_cces_*.log*
+
+# Copied dxe / ldr / map (see post_build.py)
+output/
 
 # Study notes under doc/ are tracked — do not ignore.
 !doc/
