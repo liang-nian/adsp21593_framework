@@ -10,7 +10,7 @@
 
 **API:** `Uart0Init`, `Uart0Poll`, `Uart0Rd`, `Uart0Wr`.
 
-**RX:** Cyclic DMA fills the ring continuously. Production index from **`UART0_RXDMA_XCNT_CUR`**: `wr_idx = DMA_LEN - XCNT` every 1 ms in `Uart0Poll`. `Uart0Rd` pops one byte or returns underrun if `rd == wr`.
+**RX:** Cyclic DMA fills the ring continuously. Production index from **`pREG_DMA21_XCNT_CUR`** (UART0 RX DMA channel 21): `wr_idx = DMA_LEN - XCNT`, with `XCNT == 0` mapped back to index 0. `Uart0Poll` runs every 1 ms. `Uart0Rd` pops one byte or returns underrun if `rd == wr`.
 
 **TX:** Stop-mode DMA; wait on `is_tx_over` (volatile) with timeout; chunk if `len > 512`.
 
@@ -68,8 +68,9 @@ flowchart TB
 - `Tmr0Callback` → **`Uart0Poll`** 每 1 ms：
 
 ```text
-cur_wr_idx = DMA_LEN - UART0_RXDMA_XCNT_CUR;   // 已写入位置
-检测 overrun（rd/wr 与旧 wr 关系）
+xcnt = *pREG_DMA21_XCNT_CUR;          // UART0 RX = DMA21，剩余传输数
+若 xcnt==0，写指针记为 0（而不是 DMA_LEN）
+检测 overrun：写指针跨越读指针，或落到读指针上
 rx_wr_idx = cur_wr_idx;
 ```
 

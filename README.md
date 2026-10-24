@@ -105,6 +105,8 @@ Each topic is **one bilingual file** under [`doc/`](doc/): **`## English`**, the
 | ADAU1962 DAC | [doc/adau1962.md](doc/adau1962.md) | I2C 0x04, clock **master** |
 | ADAU1979 ADC | [doc/adau1979.md](doc/adau1979.md) | I2C 0x11, SAI **slave** |
 | AD2428 A2B | [doc/ad2428.md](doc/ad2428.md) | SigmaStudio export / **USBi needs clocks & free TWI** |
+| Architecture, protocols, A2B load order | [doc/engineering_notes.md](doc/engineering_notes.md) | Cores, bus fields, SigmaStudio script, USBi order |
+| Verified defects | [doc/bugs.md](doc/bugs.md) | Bugs fixed on this tree, and the build attempt |
 
 ### Dependency sketch
 
@@ -221,7 +223,7 @@ framework/
 
 ### 笔记索引
 
-与 English 节「Documentation index」相同：[tdm_i2s](doc/tdm_i2s.md)、[hardware](doc/hardware.md)、[audio_flow](doc/audio_flow.md)、[sport](doc/sport.md)、[sru](doc/sru.md)、[spu](doc/spu.md)、[twi](doc/twi.md)、[switch](doc/switch.md)、[timer](doc/timer.md)、[uart](doc/uart.md)、[adau1962](doc/adau1962.md)、[adau1979](doc/adau1979.md)、[ad2428](doc/ad2428.md)。
+与 English 节「Documentation index」相同，并增加 [engineering_notes](doc/engineering_notes.md)、[bugs](doc/bugs.md)。
 
 ### 评估板说明
 

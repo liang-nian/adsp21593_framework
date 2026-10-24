@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "uart/uart.h"
 #include "ad2428/ad2428.h"
@@ -263,17 +264,35 @@ void TuneRx(uint8_t byte) {
 void TuneTx(uint8_t cmd, uint8_t* data, uint32_t len) {
   uint32_t i;
   uint16_t crc16 = 0xFFFF;
+  uint8_t len8;
+  uint8_t crc_bytes[2];
+
+  /* TuneRx accepts a 1-byte length only for command 0x01. Commands 0x02,
+   * 0x03 and 0x04 are header + cmd + CRC. A 4-byte length does not match
+   * either form, and neither does the host endianness of a uint32_t. */
+  if (cmd == 0x01u) {
+    if (len > 255u || (len > 0u && data == NULL)) {
+      return;
+    }
+  }
 
   Uart0Wr(header, 2);
   Uart0Wr(&cmd, 1);
   crc16 = Crc16Update(crc16, cmd);
-  Uart0Wr(&len, 4);
-  for (i = 0; i < 4; ++i) {
-    crc16 = Crc16Update(crc16, (uint8_t*)(&len) + i);
+
+  if (cmd == 0x01u) {
+    len8 = (uint8_t)len;
+    Uart0Wr(&len8, 1u);
+    crc16 = Crc16Update(crc16, len8);
+    if (len > 0u) {
+      Uart0Wr(data, len);
+      for (i = 0u; i < len; ++i) {
+        crc16 = Crc16Update(crc16, data[i]);
+      }
+    }
   }
-  Uart0Wr(data, len);
-  for (i = 0; i < len; ++i) {
-    crc16 = Crc16Update(crc16, data[i]);
-  }
-  Uart0Wr(&crc16, 2);
+
+  crc_bytes[0] = (uint8_t)(crc16 & 0xFFu);
+  crc_bytes[1] = (uint8_t)(crc16 >> 8);
+  Uart0Wr(crc_bytes, 2u);
 };

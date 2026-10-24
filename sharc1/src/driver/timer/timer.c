@@ -40,6 +40,11 @@ void Tmr0Init(void) {
   adi_tmr_Open (TMR0_DEV, tmr0_mem, ADI_TMR_MEMORY, Tmr0Callback, NULL,
                 &tmr0_dev);
   Tmr0Cfg();
+  /* Tmr0Cfg only fills tmr0_cfg. The driver does not read that struct
+   * until adi_tmr_Config() copies it into the timer. Without this call
+   * Enable starts the timer on its reset config and Uart0Poll never runs
+   * at 1 ms. */
+  adi_tmr_Config(tmr0_dev, &tmr0_cfg);
   adi_tmr_Enable(tmr0_dev, true);
 };
 

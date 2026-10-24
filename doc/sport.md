@@ -28,7 +28,7 @@ flowchart TB
 
 `FRAME_LEN=48`, `TDM_NORM=16`, `TDM_A2B=32`; 32-bit slots; early FS; L1 `ADI_CACHE_ALIGN` DMA buffers.
 
-**SP1B vs SP1A:** 4th boolean to `adi_sport_ConfigClock` is **`true` on SP1B**, **`false` on SP1A** — intentional stagger. Full table in the 中文 section below.
+**SP1B vs SP1A:** `adi_sport_ConfigClock(h, ratio, bUseIntlClk, bRisingEdge, bGatedClk)`. The 3rd argument is internal clock and is **`false` on every half-SPORT**. The 4th argument is **`bRisingEdge`**: **`true` on SP1B**, **`false` on SP1A** — intentional edge stagger, not an internal-clock select. Full table in the 中文 section below.
 
 Requires prior `Spu0Init()`.
 
@@ -97,10 +97,10 @@ DMA 缓冲：**time-major** int32；`SpMsg` float：**channel-major**；`__built
 | FS | `ConfigFrameSync(..., 31, ...)`，early FS `true` |
 | 全局组 | 六路半 SPORT 同步启停 |
 
-**`adi_sport_ConfigClock(h, 32, rising?, internal?, gated?)` 第 4 参（InternalClock / 相位相关）：**
+**`adi_sport_ConfigClock(h, nClockRatio, bUseIntlClk, bRisingEdge, bGatedClk)`。** 第 3 参是内部时钟，本工程六路全是 `false`（外部 BCLK，由 ADAU1962 经 SRU 送入）。第 4 参是 `bRisingEdge`（CKRE，数据/内部帧沿），不是 InternalClock。第 5 参门控时钟全是 `false`（多通道模式下驱动也会忽略它）。
 
-| 半 SPORT | 第 4 参 |
-|----------|---------|
+| 半 SPORT | 第 4 参 `bRisingEdge` |
+|----------|------------------------|
 | SP0A → DAC | `true` |
 | SP0B ← ADC | `false` |
 | SP1A → A2B0 | `false` |
@@ -113,7 +113,7 @@ DMA 缓冲：**time-major** int32；`SpMsg` float：**channel-major**；`__built
 
 **为什么 A2B 可以是 TDM32：** 并不是一根线上跑 32 slot。在**引脚**上，A2B 实际是 **两路并行的 TDM16 数据线**（SPORT 主/副数据口）：发送 `SPT1_AD0` / `SPT1_AD1` → DAI0 PB05/PB06，接收 DAI0 PB01/PB02 → `SPT1_BD0` / `SPT1_BD1`（见 `signal_route.c`）。软件 DMA 把两路合成一块 **32 slot** 缓冲（`TDM_A2B = 2 × TDM_NORM`），算法侧看成一条 TDM32，板级/管脚仍是 **2×TDM16**。
 
-**SP1B 时钟沿错开（A2B0 RX）：** 板级 BCLK/FS 由 ADAU1962 经 SRU 扇出。A2B 往返 + 走线 **传播时延** 在 ~24.576 MHz 下半个 bit 仅 ~20 ns；若 SP1B 与 SP1A 用完全相同的沿关系，setup/hold 易被吃掉 → 偶发错字/静音。**SP1B 故意错开一档 InternalClock 配置换相位裕量。** 改沿前用示波器看 SP1B 数据相对 BCLK；换线长或拓扑后可能要重标定。
+**SP1B 时钟沿错开（A2B0 RX）：** 板级 BCLK/FS 由 ADAU1962 经 SRU 扇出。A2B 往返 + 走线 **传播时延** 在 ~24.576 MHz 下半个 bit 仅 ~20 ns；若 SP1B 与 SP1A 用完全相同的沿关系，setup/hold 易被吃掉 → 偶发错字/静音。**SP1B 的 `bRisingEdge` 与 SP1A 相反，用来换相位裕量。** 不要把第 4 参改成内部时钟：第 3 参已经是 `false`。改沿前用示波器看 SP1B 数据相对 BCLK；换线长或拓扑后可能要重标定。
 
 ```mermaid
 sequenceDiagram

@@ -3,7 +3,13 @@
 #include "adau1962_reg.h"
 #include "adau1962.h"
 #include "twi/twi.h"
-#include "uart/uart.h"
+#include "log/log.h"
+
+static uint8_t adau1962_clk_ready = 0u;
+
+uint8_t Adau1962ClkReady(void) {
+  return adau1962_clk_ready;
+};
 
 #define TIME_BND    (0xFFFFu)
 
@@ -35,7 +41,8 @@ static void Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
   }
   delay = 0u;
   val = Twi2RegShtRd(ADAU1962_PLL_CTL_CTRL1);
-  while(!((val & 0x4) >> 2)){
+  /* PLL_CLK_CTRL1 bit 2 is PLL_LOCK (read-only). */
+  while ((val & 0x4u) == 0u) {
     if (delay > TIME_BND) {
       ShtLog("adau1962 pll fail.\n");
       break;
@@ -44,9 +51,13 @@ static void Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
     delay++;
     asm("nop;");
   }
+  if ((val & 0x4u) != 0u) {
+    adau1962_clk_ready = 1u;
+  }
 };
 
 void Adau19620Init(void) {
+  adau1962_clk_ready = 0u;
   Twi2Open();
   Adau1962Pll(ADAU19620_DEV, adau19620_pll, ADAU19620_PLL_LEN);
   Adau1962Cfg(ADAU19620_DEV, adau19620_cfg, ADAU19620_CFG_LEN);
