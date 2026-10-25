@@ -45,9 +45,8 @@ void AudioProcess(void) {
 
 void AudioFlowInit(void) {
   /* SPU before any UART/SPORT DMA master. UART RX DMA before TMR0, because
-   * the 1 ms tick calls Uart0Poll. SRU then the ADAU1962 clock master, then
-   * the ADC slave. Ad24280Init refuses to run until that PLL is locked and
-   * TWI2 is idle (USBi must not be plugged in). SPORT DMA starts last. */
+   * the 1 ms tick calls Uart0Poll. SRU, then the ADAU1962 clock master, then
+   * the ADC slave, then A2B, then SPORT DMA. */
   Spu0Init();
   Uart0Init();
   Tmr0Init();
@@ -56,6 +55,5 @@ void AudioFlowInit(void) {
   Adau19620Init();
   Adau19790Init();
   Ad24280Init();
-  // Ad24281Init();
   SpInit();
 };

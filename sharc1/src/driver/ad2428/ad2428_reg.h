@@ -48,20 +48,6 @@ typedef struct Ad2428Reg {
 
 extern Ad2428Reg ad24280_cfg[AD24280_CFG_LEN];
 
-/*
- * Dev1 (AD24281): second A2B path — NOT present on the official ADSP-21593
- * eval hardware (ADZS-21593-EZKIT / SOM-21593 + SOMCRR-EZKIT).
- *
- * Official board has a single A2B master. AD24281_* symbols and ad24281_cfg
- * remain only as empty stubs so existing call sites compile; do not treat
- * them as a supported second bus on this platform.
- */
-#define AD24281_MASTER_DEV    (0x6Cu)
-#define AD24281_SLAVE_DEV     (0x6Du)
-#define AD24281_CFG_LEN       (1u)
-
-extern Ad2428Reg ad24281_cfg[AD24281_CFG_LEN];
-
 #ifdef __cplusplus
 } // extern "C"
 #endif

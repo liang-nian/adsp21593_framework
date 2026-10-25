@@ -5,6 +5,7 @@
 #include <stdarg.h>
 
 #include "uart.h"
+#include "tune/tune.h"
 
 // Buffer size depends on baud rate and polling interval.
 #define DMA_LEN                 (512u)
@@ -125,7 +126,13 @@ static uint8_t Uart0WaitTx(void) {
 uint8_t Uart0Rd(uint8_t* val) {
   uint32_t wr_idx = uart0_msg.rx_wr_idx;
   if (uart0_msg.rx_rd_idx == wr_idx) {
-    uart0_msg.underrun_cnt += 1u;
+    /* Idle polls increment this on every empty read. At the top, start over
+     * so the count does not sit at 0xFFFFFFFF. */
+    if (uart0_msg.underrun_cnt == 0xFFFFFFFFu) {
+      uart0_msg.underrun_cnt = 0u;
+    } else {
+      uart0_msg.underrun_cnt += 1u;
+    }
     return 1u;
   }
   *val = uart0_rx_buf[uart0_msg.rx_rd_idx];
@@ -180,14 +187,24 @@ void Uart0Close(void) {
   adi_uart_Close(uart0_dev);
 };
 
-void Uart0Mon(void) {
-  char msg[32];
-  uint32_t len;
+static void Uart0MonTx(const char* format, ...) {
+  char msg[48];
+  int len;
+  va_list args;
 
-  len = snprintf(msg, sizeof(msg), "underrun cnt: %d.\n",
-        uart0_msg.underrun_cnt);
-  Uart0Wr((uint8_t*)msg, len);
-  len = snprintf(msg, sizeof(msg), "overrun cnt: %d.\n",
-        uart0_msg.overrun_cnt);
-  Uart0Wr((uint8_t*)msg, len);
+  va_start(args, format);
+  len = vsnprintf(msg, sizeof(msg), format, args);
+  va_end(args);
+  if (len <= 0) {
+    return;
+  }
+  if ((size_t)len >= sizeof(msg)) {
+    len = (int)sizeof(msg) - 1;
+  }
+  TuneTx(TUNE_CMD_UART_MON, (uint8_t*)msg, (uint32_t)len);
+};
+
+void Uart0Mon(void) {
+  Uart0MonTx("underrun cnt: %d.\n", uart0_msg.underrun_cnt);
+  Uart0MonTx("overrun cnt: %d.\n", uart0_msg.overrun_cnt);
 };

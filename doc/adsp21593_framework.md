@@ -42,7 +42,7 @@ flowchart TB
   end
 ```
 
-官方载板上只有 **一路 A2B 主节点**。代码里叫 AD24280，I2C `0x68`（主节点本地口）和 `0x69`（主节点转发到总线侧从节点的口）。AD24281（`0x6C` / `0x6D`）是空桩：`ad24281_cfg` 只有一条全 0，`AudioFlowInit` 里 `Ad24281Init()` 保持注释。SPORT2 和对应的 DAI1 线仍然接上了，板上没有第二颗收发器。
+官方载板上只有 **一路 A2B 主节点** AD24280，I2C `0x68`（主节点本地口）和 `0x69`（主节点转发到总线侧从节点的口）。`Ad24280Init` 回放 `ad24280_cfg`。SPORT2 和对应的 DAI1 线仍然接上了，板上没有第二颗收发器。
 
 | 核 | 工程 | 角色 |
 |----|------|------|
@@ -73,7 +73,7 @@ RTS/CTS 只是复用到了引脚，UART 驱动没有打开硬件流控。
 1. `adi_initComponents()`（`sharc1/system/adi_initialize.c`）：`adi_sec_Init()`，然后 `adi_initpinmux()`，然后 `adi_mcapi_Init()`。
 2. `adi_core_enable(ADI_CORE_SHARC1)`。这是 CCES 模板：正在跑的 Core 1 打开第二颗 SHARC。枚举名 `ADI_CORE_SHARC1` 指的是 Core 2，不是把本核再打开一次。
 3. `AudioFlowInit()`。
-4. `while (1) MonTmp();`。主循环只从 UART 取单字节监视命令。音频不在主循环里跑。
+4. `while (1)`。主循环把 UART 字节交给 `TuneRx`。监视和切换 A2B 配置在 tune 里只置位；主循环看到标志就调用对应函数，然后清掉标志。音频不在主循环里跑。
 
 `AudioFlowInit`（`audio_flow.c`）的顺序有依赖，不能对调：
 
@@ -89,9 +89,9 @@ Spu0Init → Uart0Init → Tmr0Init → Sw0Init → SruInit
 | TMR | `adi_tmr_Config` 把 125000 个 SCLK 周期写进定时器，然后才 Enable。只填结构体不会生效。 |
 | switch | I2C GPIO 扩展（`0x22`）打开 codec 电源并释放低有效复位，再空等至少 300 ms。 |
 | SRU | 把 DAC 的 BCLK/FS 脚扇出到全部 SPORT、ADC 和 A2B。这一步只接线。DAC PLL 还没配，线上还没有稳定时钟。 |
-| ADAU1962 | 全板唯一的 TDM 时钟主机。PLL 锁定后 `Adau1962ClkReady()` 变为 1，BCLK/FS 才算可用。 |
+| ADAU1962 | 全板唯一的 TDM 时钟主机。PLL 锁定之后，BCLK/FS 从这颗片子出来。 |
 | ADAU1979 | SAI 从机，吃上面的 BCLK/FS。 |
-| AD24280 | 时钟已锁定且 TWI2 空闲才回放发现脚本。USBi 必须已经拔掉。 |
+| AD24280 | 回放发现脚本。开始前 DAC 的 BCLK/FS 应已在线上，USBi 应已拔掉。做法见第 3 节。 |
 | SPORT | 最后开 DMA。六路半 SPORT 都是时钟从机。 |
 
 ### 1.3 路由
@@ -179,7 +179,7 @@ DMA 缓冲是 **time-major** int32：`buf[i * 时隙数 + j]`。算法看到的 
 | 4–7 | `Harm1000()`，1 kHz 正弦，相位步进 `1000/48000` |
 | 8–11 | A2B 输入槽 0/2/1/3，把两根 TDM16 上的相邻槽交错放出来听 |
 
-主循环 `MonTmp` 读 UART 单字节：`0xAA` 读 A2B 中断和误码，`0xBB` 打印 UART underrun/overrun，`0xCC` 打印 SPORT 回调里用 `emuclk` 差除以 1000 的相对负载。其它字节丢掉。
+主循环把 UART 字节送进 `TuneRx`。CRC 正确后只置标志：`0x01` 打开回写，`0x02` 读 A2B 中断和误码，`0x03` 打印 UART underrun/overrun，`0x04` 打印 SPORT 回调里用 `emuclk` 差除以 1000 的相对负载。回写打开后这条循环不再调用 `TuneRx`，读到的字节立刻 `Uart0Wr` 回去。同一帧 `5A A5 01 7E 80` 再出现一次就关掉回写。其余标志由主循环调用 `Ad24280Mon`、`Uart0Mon` 或 `CpuMsgMon`，再把对应标志清掉。这三路监视的文本由 `TuneTx` 按各自的命令号发回。
 
 ---
 
@@ -244,23 +244,23 @@ UART 的 DMA 通道号是这颗片子固定的。ADSP-21593 上 UART0 RX 是 **D
 | RX | 描述符指向自己，`XCount = 512`，`XModify = 1`，`ADI_PDMA_DESCRIPTOR_LIST` |
 | TX | 停止模式 DMA，单次最长 512 字节 |
 
-`Uart0Poll` 由 TMR0 每 1 ms 调用，只更新写指针和 overrun。`Uart0Rd` 在 `rd == wr` 时返回 1，并把 `underrun_cnt` 加 1。`MonTmp` 会一直读到空，空闲轮询也会计入 underrun。
+`Uart0Poll` 由 TMR0 每 1 ms 调用，只更新写指针和 overrun。`Uart0Rd` 在 `rd == wr` 时返回 1，并把 `underrun_cnt` 加 1。计到 `0xFFFFFFFF` 后再读到空，计数回到 0。主循环会一直读到空，空闲轮询也会计入 underrun。
 
 `Uart0Wr` 拒绝空指针和 0 长度。超过 512 就分块，每块等 `ADI_UART_EVENT_TX_PROCESSED`。长度刚好是 512 的倍数时不再补一次 0 长度的 DMA。每次等待的超时是 `0x1000000` 次空转，独立重装。
 
-`ShtLog` 把 `vsnprintf` 的结果交给 `Uart0Wr`。缓冲 128 字节，截断时只发 127 字节，不含结尾的 NUL。
+`ShtLog` 把 `vsnprintf` 的结果交给 `TuneTx`，命令 `0x0C`。缓冲 128 字节，截断时只发 127 字节，不含结尾的 NUL。`LngLog(level, format, ...)` 用同一块缓冲，先写 `文件名:行号 级别 `，再接格式化后的信息。文件名和行号由宏从调用点填入；`__FILE__` 只留最后一级，避免整条路径把 128 字节占满。级别是调用者传入的字符串。信息过长时同样只发 127 字节。
 
-监视字节没有帧头：`0xAA` / `0xBB` / `0xCC`，见 1.4 节。`tune.c` 里另有一套帧，**没有**接到 `MonTmp`，主循环不会解析它。格式按 `TuneRx` / `TuneTx` 的实现记在这里：
+监视回包和日志都经 `TuneTx` 发出，帧格式与下面这张表相同。`Ad24280Mon` 用 `0x02`，`Uart0Mon` 用 `0x03`，`CpuMsgMon` 用 `0x04`。每一行文本是一帧。
 
 | 字段 | 宽度 | 含义 |
 |------|------|------|
 | 帧头 | 2 | 固定 `5A A5`，不进入 CRC |
 | cmd | 1 | CRC 从这里开始，初值 `0xFFFF`，Modbus CRC16 |
-| len | 0 或 1 | 仅 cmd `0x01` 有 1 字节长度。`0x02`–`0x04` 没有长度 |
-| payload | len | 仅 `0x01`。`TuneTx` 拒绝 len > 255 |
-| CRC | 2 | 低字节在前 |
+| len | 0 或 1 | `len > 0` 时有 1 字节长度。主机下发的 `0x01`–`0x04` 没有负载，所以没有这一字节。日志 `0x0C` 和监视回包有负载 |
+| payload | len | `0x0C` 和监视回包是文本。`TuneTx` 拒绝 len > 255。回写打开后，输入字节不走这张表，原样读出再写回 |
+| CRC | 2 | 低字节在前。覆盖 cmd、长度字节和 payload |
 
-CRC 正确后 `TuneProc` 目前把标志清掉，没有真正上传参数。`ack[]` 和 `nack[]` 没有被发送。
+CRC 正确后只把标志置上。主循环执行完再清标志。参数上传还没做。`ack[]` 和 `nack[]` 没有被发送。
 
 ### 2.2 I2C / TWI
 
@@ -299,7 +299,9 @@ Marcin Floryan 绘制，公有领域。[Wikimedia Commons: I2C data transfer.svg
 
 多字节寄存器地址在线上是高字节先出。这和 SHARC 内存的小端不是一回事。线上每个字节内部仍是 MSB 先出，那是 I2C 的比特序，也和内存端序不是同一个概念。
 
-地址和数据必须在同一次写里面。如果把它们拆成两次寻址写，从机会把数据的第一字节当成新的寄存器地址。
+短写把寄存器地址和数据放在同一次写里：START、从机地址、地址字节、数据、STOP。`Twi2DevRegShtWr` 是这种，对应 bare metal 的 `ad2425w_write_ctrl_reg`。
+
+长写按 SAM bare metal 的 `ad2425w_write_ctrl_reg_block` 分两次。第一次只发地址字节，`adi_twi_Write` 最后一参 `true` 表示这条写以重复起始结束，不发 STOP。第二次发数据，最后一参 `false` 表示以 STOP 结束。第二次调用会重新送出从机地址。
 
 总线上同一时刻只能有一个主机。第二个主机（例如调试器）插在同一对 SCL/SDA 上时，固件无法从“自己有没有 Open”判断对方还在不在。
 
@@ -332,12 +334,11 @@ Marcin Floryan 绘制，公有领域。[Wikimedia Commons: I2C data transfer.svg
 
 | 函数 | 线上事务 |
 |------|----------|
-| `Twi2Open` / `Twi2Stop` | 打开或关闭。忙时 Open 直接返回；已空闲时 Stop 直接返回 |
-| `Twi2IsIdle` | 本核自己有没有打开 TWI2。看不出 USBi |
+| `Twi2Open` / `Twi2Stop` | 打开或关闭 |
 | `Twi2DevAddrSet` | 只设地址，给随后的 `Twi2RegShtWr` / `Twi2RegShtRd` 用 |
 | `Twi2DevRegShtWr` | 一次写 `{reg, data}`，不重复起始 |
 | `Twi2DevRegShtRd` | 先写 1 字节地址且重复起始，再读 1 字节 |
-| `Twi2DevRegLngWr` | 地址按大端放 1、2 或 4 字节，后面紧跟最多 128 字节数据，一次 Write |
+| `Twi2DevRegLngWr` | 地址按大端放 1、2 或 4 字节，`adi_twi_Write(..., true)`；接着数据，`adi_twi_Write(..., false)` |
 
 每个设备初始化都是自己的 Open、访问、Stop。从机地址：
 
@@ -497,11 +498,11 @@ ADAU1962 在这条链上有两个角色：I2C 从机，以及 TDM 时钟主机�
 
 #### ADSP 接口
 
-DSP 侧没有专用的 ADAU 驱动。配置就是 TWI 短写，然后读回。本工程的入口是 `Adau19620Init()`。`Adau1962ClkReady()` 在看到 PLL 锁定位置位后返回 1，供 A2B 初始化查询。
+DSP 侧没有专用的 ADAU 驱动。配置就是 TWI 短写，然后读回。本工程的入口是 `Adau19620Init()`。
 
 #### 本工程配置
 
-地址 `0x04`。PLL 三步写在 `adau19620_pll`，中间各空转 `0xFFFF` 次，然后读 `PLL_CLK_CTRL1`（`0x01`）直到 **bit 2（PLL_LOCK，只读）** 为 1。超时约 `0xFFFF` 次读，失败只打日志，`adau1962_clk_ready` 保持 0，后面的 A2B 会因此退出。
+地址 `0x04`。PLL 三步写在 `adau19620_pll`，中间各空转 `0xFFFF` 次，然后读 `PLL_CLK_CTRL1`（`0x01`）直到 **bit 2（PLL_LOCK，只读）** 为 1。超时约 `0xFFFF` 次读，失败只打日志，后面的配置和 A2B 发现仍会继续。
 
 | 顺序 | 寄存器 | 值 | 含义 |
 |------|--------|----|------|
@@ -638,13 +639,13 @@ DSP 侧没有 A2B 专用外设。发现和寄存器都走 TWI。本工程把 Sig
 | `reg` | 地址 |
 | `val_width` / `val_len` / `val_ptr` | 载荷 |
 
-入口是 `Ad24280Init()`、`Ad24280Mon()`。`Ad24281Init()` / `Ad24281Mon()` 在官方板上是空操作。
+入口是 `Ad24280Init()` 和 `Ad24280Mon()`。`Ad24280Init` 打开 TWI2，回放 `ad24280_cfg`，再关闭。
 
 #### 本工程配置
 
 `ad24280_cfg` 有 **829** 条：WRITE 765、READ 49、DELAY 15。每条 `reg_width`、`val_width`、`val_len` 都是 1。地址：`0x68` × 158，`0x69` × 656，`0x00` × 15（只出现在 DELAY）。拓扑注释：12 个从节点，每节点 2 个麦，48 kHz，下降沿采样，FS 上升沿脉冲，early FS，TDM16，32 bit 时隙，收发器相对 SHARC 是从机。
 
-回放规则：单字节 WRITE 走 `Twi2DevRegShtWr`；READ 的返回值丢掉（读 `INTTYPE` 会清中断）；DELAY 忙等 `值 × 0x100000`。`val_width > 1` 立刻返回。本表不会触发。若将来导出 2 字节延时，按大端 `(b0<<8)|b1`。
+回放规则：单字节 WRITE 走 `Twi2DevRegShtWr`；READ 的返回值丢掉（读 `INTTYPE` 会清中断）；DELAY 忙等 `值 × 0x100000`。`val_len == 2` 取 `val_ptr[1]`，否则取 `val_ptr[0]`。这段忙等只是停顿。主节点运行和从节点发现在它后面继续轮询，直到 `MSTR_RUNNING` / `DSCDONE`，或者 `TIME_BND` 超时。`val_width > 1` 立刻返回。本表不会触发。
 
 两条和这张表绑在一起的轮询：
 
@@ -692,7 +693,7 @@ DSP 侧没有 A2B 专用外设。发现和寄存器都走 TWI。本工程把 Sig
 
 `INTMSK0 = 0x70`，`INTMSK2 = 0x0D`，`BECCTL = 0xFF`，`RESPCYCS = 0x46`。`Ad2428Mon` 读 `INTSRC`、`INTTYPE`、`BECNT`，然后把 `BECNT` 写 0。误码类型 0–6 计入 `data_err_cnt`。
 
-`Ad24280Init` 在回放前检查 `Adau1962ClkReady()` 和 `Twi2IsIdle()`，任一失败就打日志返回。
+`Ad24280Init` 直接 `Twi2Open`、回放、`Twi2Stop`。USBi 和 BCLK/FS 的使用顺序写在第 3 节。
 
 ### 2.7 板级 GPIO 开关
 
@@ -740,7 +741,7 @@ GPIOA bit7→bit0（低有效的脚用 `~` 标出）：
 
 GPIOB `0xFD`：bit1 `~SPDIF_DIGITAL_EN` 为 0，其余保持不活动电平。
 
-`Twi2Stop` 之后，`SwResetSettle` 用 `__builtin_emuclk` 空转 3×10^8 周期。ADAU1962A Rev. A 要求 PU/RST 之后 300 ms。CCLK 最高按 1 GHz 估，这个等待不会短于 300 ms。
+每次 `SwCfg` 写完后按 `TIME_BND`（300000000）空转 `nop`。ADAU1962A Rev. A 要求 PU/RST 之后 300 ms。按 CCLK 1 GHz、每次循环至少 1 个周期估算，这个次数不少于 300 ms。使能和释放复位各等一次。
 
 ### 2.8 通用定时器
 
@@ -854,18 +855,18 @@ flowchart LR
 
 **DMA 缓冲放在 L1，并且按驱动要求对齐。** CPU 和 DMA 同时看一块可缓存的内存时，会读到对方还没写到内存的旧值。UART 环和 SPORT 音频缓冲同一原则。跨中断共享的读写指针用 `volatile`，进函数先抄到局部变量。
 
-**TWI 一次失败会传染。** NAK 或超时之后控制器可能没有 STOP。每个设备自己 Open 和 Stop，用开关开销换隔离。`Twi2DevRegLngWr` 的地址必须和大端数据拼成一次写。`reg_len` 不是 1、2、4 时函数直接返回，总线上没有任何波形。
+**TWI 一次失败会传染。** NAK 或超时之后控制器可能没有 STOP。每个设备自己 Open 和 Stop，用开关开销换隔离。`Twi2DevRegLngWr` 先写大端地址并重复起始，再写数据并 STOP。`reg_len` 不是 1、2、4 时函数直接返回，总线上没有任何波形。
 
-**USBi 占着 TWI2，而且不出时钟。** 用 SigmaStudio 发现时：先让固件跑完 SPU、UART、TMR、switch、SRU、DAC、ADC，确认 BCLK/FS 已经从 DAC 出来，并且固件已经 `Twi2Stop`。然后插 USBi。拔掉之后才允许 `Ad24280Init`。`Twi2IsIdle` 只表示本核没有打开控制器。
+**USBi 占着 TWI2，而且不出时钟。** 这是板上的使用顺序，固件不检查。USBi 是挂在 TWI2 上的 I2C 主机，不产生 BCLK/FS。A2B 发现要看到 DAC 已经送出的 BCLK/FS，并且这条 I2C 上只剩 SHARC 一个主机。用 SigmaStudio 发现时：先让固件跑完 SPU、UART、TMR、switch、SRU、DAC、ADC，确认 BCLK/FS 已经从 DAC 出来，并且固件已经 `Twi2Stop`，再插 USBi。拔掉 USBi 之后再调用 `Ad24280Init`。软件看不出 USBi 还插着。
 
 **没有 U6 的板。** 一部分载板没有这颗 I2C GPIO。写 `0x22` 会 NAK，后面的 codec 和 A2B 都会失败。先确认板上有没有等价的上电和复位，再决定要不要跳过 `Sw0Init`。
 
-**复位释放后要等。** ADAU1962A 要求 PU/RST 之后 300 ms。只空转几万次 `nop` 远不够，PLL 轮询会超时。
+**复位释放后要等。** ADAU1962A 要求 PU/RST 之后 300 ms。`switch.c` 的 `TIME_BND` 是 300000000，每次写完 GPIO 都按这个次数空转。
 
 **定时器没配就没有 UART 接收。** `Uart0Poll` 不在字节中断里。TMR0 没按 1 ms 跑，写指针停住，`Uart0Rd` 永远看到空缓冲。
 
-**不要在音频回调里大量打日志。** `Uart0Wr` 会忙等 TX 完成。`ShtLog` 放在 `AudioProcess` 里会把 1 ms 的块周期吃掉。
+**不要在音频回调里大量打日志。** `TuneTx` 里的 `Uart0Wr` 会忙等 TX 完成。`ShtLog` 放在 `AudioProcess` 里会把 1 ms 的块周期吃掉。
 
-**SP2 接了线，没有芯片。** 官方板不要拿第二路 A2B 做通过标准。`Ad24281Init` 保持注释。
+**SP2 接了线，没有芯片。** 官方板只有 AD24280 这一路 A2B。不要拿第二路 SPORT 做通过标准。
 
 **CPU 负载的单位是相对的。** `CpuMsgMon` 打印的是 `emuclk` 差值除以 1000，不是 MHz，也不是百分比。只能拿来比两次运行。

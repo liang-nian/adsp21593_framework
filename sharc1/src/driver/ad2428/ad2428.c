@@ -1,11 +1,13 @@
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "ad2428.h"
 #include "ad2428_reg.h"
-#include "adau1962/adau1962.h"
 #include "twi/twi.h"
 #include "log/log.h"
+#include "tune/tune.h"
 
 #define TIME_BND        (0x100000u)
 #define DATA_ERR_BND    (7u)
@@ -22,11 +24,27 @@ typedef struct Ad2428Msg {
 } Ad2428Msg;
 
 static Ad2428Msg ad24280_mon = {0};
-static Ad2428Msg ad24281_mon = {0};
 
 static void Ad2428CfgDelay(uint32_t delay_val) {
 	volatile uint32_t delay_cnt = delay_val * TIME_BND;
 	for ( ; delay_cnt >0; delay_cnt-- );
+};
+
+static void Ad2428MonTx(const char* format, ...) {
+  char msg[64];
+  int len;
+  va_list args;
+
+  va_start(args, format);
+  len = vsnprintf(msg, sizeof(msg), format, args);
+  va_end(args);
+  if (len <= 0) {
+    return;
+  }
+  if ((size_t)len >= sizeof(msg)) {
+    len = (int)sizeof(msg) - 1;
+  }
+  TuneTx(TUNE_CMD_A2B_MON, (uint8_t*)msg, (uint32_t)len);
 };
 
 static void Ad2428Mon(uint8_t master_dev, Ad2428Msg* mon) {
@@ -45,13 +63,13 @@ static void Ad2428Mon(uint8_t master_dev, Ad2428Msg* mon) {
   mon->tot_becnt += mon->be_cnt;
   Twi2DevRegShtWr(master_dev, AD2428_REG_BECNT, 0u);
 
-  ShtLog("ad2428 %d mon:\n", master_dev);
-  ShtLog("int cnt: %d.\n", mon->int_cnt);
-  ShtLog("be cnt: %d.\n", mon->be_cnt);
-  ShtLog("tot be cnt: %d.\n", mon->tot_becnt);
-  ShtLog("int src: %d.\n", mon->int_src);
-  ShtLog("int type: %d.\n", mon->int_type);
-  ShtLog("node num: %d.\n", mon->node_num);
+  Ad2428MonTx("ad2428 %d mon:\n", master_dev);
+  Ad2428MonTx("int cnt: %d.\n", mon->int_cnt);
+  Ad2428MonTx("be cnt: %d.\n", mon->be_cnt);
+  Ad2428MonTx("tot be cnt: %d.\n", mon->tot_becnt);
+  Ad2428MonTx("int src: %d.\n", mon->int_src);
+  Ad2428MonTx("int type: %d.\n", mon->int_type);
+  Ad2428MonTx("node num: %d.\n", mon->node_num);
 };
 
 static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
@@ -88,16 +106,12 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
       rd_val = Twi2DevRegShtRd(i2c_addr, reg);
     }
     else if(a2b_cmd == DELAY){
-      /* SigmaStudio exports a 1-byte delay, or a 16-bit big-endian delay.
-       * Using only val_ptr[1] drops the high byte. This table is all 1-byte. */
-      if (val_len == 2u && val_ptr != NULL) {
-        delay_val = ((uint32_t)val_ptr[0] << 8) | val_ptr[1];
+      /* Pause only. Master-running and discovery keep polling until timeout. */
+      if(val_len == 2u){
+        delay_val = val_ptr[1];
       }
-      else if (val_len >= 1u && val_ptr != NULL) {
+      else{
         delay_val = val_ptr[0];
-      }
-      else {
-        delay_val = 0u;
       }
       Ad2428CfgDelay(delay_val);
       if(i == 1){
@@ -145,30 +159,8 @@ void Ad24280Mon(void) {
   Twi2Stop();
 };
 
-void Ad24281Mon(void) {
-  /* Official 21593 eval board has no second A2B; keep API, skip bus access. */
-  (void)ad24281_mon;
-};
-
 void Ad24280Init(void) {
-  /* USBi is an I2C master on TWI2 and does not generate BCLK/FS.
-   * Discovery (CONTROL 0x84, then DISCVRY) requires the DAC clock master
-   * to already be locked, and this core to be the only TWI2 master.
-   * Unplug USBi before this call. */
-  if (!Adau1962ClkReady()) {
-    ShtLog("ad24280 skipped: dac bclk/fs not locked.\n");
-    return;
-  }
-  if (!Twi2IsIdle()) {
-    ShtLog("ad24280 skipped: twi2 busy.\n");
-    return;
-  }
   Twi2Open();
   Ad2428Cfg(AD24280_MASTER_DEV, ad24280_cfg, AD24280_CFG_LEN, &ad24280_mon);
   Twi2Stop();
-};
-
-void Ad24281Init(void) {
-  /* Official 21593 eval board has no second A2B; config table is empty. */
-  ShtLog("ad24281 skipped: no 2nd A2B on official 21593 board.\n");
 };

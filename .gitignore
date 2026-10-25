@@ -12,3 +12,6 @@ output/
 # Study notes under doc/ are tracked — do not ignore.
 !doc/
 !doc/**
+
+# Python host tool
+.venv/

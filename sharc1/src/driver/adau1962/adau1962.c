@@ -5,12 +5,6 @@
 #include "twi/twi.h"
 #include "log/log.h"
 
-static uint8_t adau1962_clk_ready = 0u;
-
-uint8_t Adau1962ClkReady(void) {
-  return adau1962_clk_ready;
-};
-
 #define TIME_BND    (0xFFFFu)
 
 static void Adau1962Cfg(uint8_t dev, Adau1962Reg* cfg, uint32_t len) {
@@ -51,13 +45,9 @@ static void Adau1962Pll(uint8_t dev, Adau1962Reg* pll, uint32_t len) {
     delay++;
     asm("nop;");
   }
-  if ((val & 0x4u) != 0u) {
-    adau1962_clk_ready = 1u;
-  }
 };
 
 void Adau19620Init(void) {
-  adau1962_clk_ready = 0u;
   Twi2Open();
   Adau1962Pll(ADAU19620_DEV, adau19620_pll, ADAU19620_PLL_LEN);
   Adau1962Cfg(ADAU19620_DEV, adau19620_cfg, ADAU19620_CFG_LEN);

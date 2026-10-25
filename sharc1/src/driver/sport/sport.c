@@ -1,13 +1,14 @@
 #include <services/int/adi_int.h>
 #include <services/int/adi_sec.h>
 #include <drivers/sport/adi_sport.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 
 #include "sport.h"
 #include "audio_flow/audio_flow.h"
-#include "log/log.h"
+#include "tune/tune.h"
 
 #define SP0A_DEV        (0u) // to dac
 #define SP0B_DEV        (0u) // from adc
@@ -107,10 +108,27 @@ float* a2b1_out(void) {
   return msg.a2b1_out_;
 };
 
+static void CpuMonTx(const char* format, ...) {
+  char text[48];
+  int len;
+  va_list args;
+
+  va_start(args, format);
+  len = vsnprintf(text, sizeof(text), format, args);
+  va_end(args);
+  if (len <= 0) {
+    return;
+  }
+  if ((size_t)len >= sizeof(text)) {
+    len = (int)sizeof(text) - 1;
+  }
+  TuneTx(TUNE_CMD_CPU_MON, (uint8_t*)text, (uint32_t)len);
+};
+
 void CpuMsgMon(void) {
-  ShtLog("cpu load: %.3f.\n", msg.cpu_load_);
-  ShtLog("max cpu load: %.3f.\n", msg.max_cpu_load_);
-  ShtLog("ave cpu load: %.3f.\n", msg.ave_cpu_load_);
+  CpuMonTx("cpu load: %.3f.\n", msg.cpu_load_);
+  CpuMonTx("max cpu load: %.3f.\n", msg.max_cpu_load_);
+  CpuMonTx("ave cpu load: %.3f.\n", msg.ave_cpu_load_);
 };
 
 static void Buf0Process(void) {

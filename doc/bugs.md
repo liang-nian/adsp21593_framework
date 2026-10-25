@@ -10,7 +10,7 @@ Review scope: `sharc1/` and `sharc2/` application sources, generated pinmux / `a
 
 ## English
 
-Fifteen firmware defects were fixed. One note mis-named a SPORT argument; the calls themselves were already right and were not edited. The ADI SHARC toolchain is not on this machine, so the tree was not cross-compiled. Host `gcc` only checked the portable `ShtLog` truncation path.
+Twelve firmware defects were fixed. One note mis-named a SPORT argument; the calls themselves were already right and were not edited. The ADI SHARC toolchain is not on this machine, so the tree was not cross-compiled. Host `gcc` only checked the portable `ShtLog` truncation path.
 
 ### Fixed
 
@@ -25,12 +25,9 @@ Fifteen firmware defects were fixed. One note mis-named a SPORT argument; the ca
 | 7 | `log.c` `ShtLog` | No `<stdarg.h>` / `<stdio.h>`, so `va_list` and `vsnprintf` were undeclared. `if (len > 128)` is off by one: `vsnprintf` returns `>= sizeof(msg)` when it truncates, and that count walks off the 128-byte buffer. | Include `<stdarg.h>`, `<stddef.h>`, `<stdio.h>`. Send at most 127 bytes. Negative or empty results send nothing. |
 | 8 | `ad2428.c`, `adau1962.c`, `adau1979.c`, `sport.c` | They call variadic `ShtLog` but included `uart.h`, which does not prototype it. | Include `log/log.h`. |
 | 9 | `adau19790_reg.c` `SAI_CTRL0` | `0x23` is SAI=`100` (TDM16) and FS=`011` (64–96 kHz). This path is 48 kHz. ADAU1979 FS=`010` is 32–48 kHz, so the byte is `0x22`. | Program `0x22`. |
-| 10 | `twi.c` `Twi2DevRegLngWr` | Two `adi_twi_Write` calls (address with a repeated start, then the payload) start a second addressed write. The slave treats `payload[0]` as a register address. The current 829-entry A2B table is all 1-byte writes and does not hit this path; the function was still wrong. | One write: MSB-first address (1, 2, or 4 bytes) plus payload, max 128 payload bytes. Longer or illegal widths return without touching the bus. |
-| 11 | `ad2428.c` `Ad2428Cfg` DELAY | A 2-byte delay used only `val_ptr[1]`. SigmaStudio’s 16-bit delay is big-endian. This table’s 15 delays are 1 byte, so behavior of the current script is unchanged. | `val_len == 2` uses `(b0 << 8) \| b1`. NULL or empty delay is 0. |
-| 12 | `ad2428.c` `Ad24280Init` | Discovery ran with no check that the DAC PLL had locked or that TWI2 was free. USBi is an I2C master and does not generate BCLK/FS. | Return unless `Adau1962ClkReady()` and `Twi2IsIdle()`. `Twi2Open` refuses a second open; `Twi2Stop` is a no-op when already idle. USBi cannot be detected in software; it has to be unplugged. |
-| 13 | `switch.c` `Sw0Init` | After releasing `~ADAU_RESET` the only wait was 65535 `nop`s, well under 1 ms. ADAU1962A Rev. A requires 300 ms after PU/RST before the part is guaranteed stable. | After `Twi2Stop`, spin `__builtin_emuclk` for 300e6 cycles. At CCLK ≤ 1 GHz that is at least 300 ms. |
-| 14 | `tune.c` `TuneTx`, `tune.h` | `TuneTx` sent a 4-byte length and took the CRC’s address. `TuneRx` accepts a 1-byte length only for command `0x01`, and no length for `0x02` / `0x03` / `0x04`. `tune.c` called `memset` without `<string.h>`. `tune.h` had no prototypes. | `0x01` sends one length byte (reject `len > 255`). Other commands send header + cmd + CRC only. CRC bytes are explicit little-endian. Prototypes added. `TuneRx` is still not called from `MonTmp` (unfinished; see `todo.md`). |
-| 15 | `switch.c` `SwCfg` | Unused `uint8_t res`. | Removed. |
+| 10 | `switch.c` `Sw0Init` | After releasing `~ADAU_RESET` the only wait was 65535 `nop`s, well under 1 ms. ADAU1962A Rev. A requires 300 ms after PU/RST before the part is guaranteed stable. | `TIME_BND` is 300000000. The existing `nop` loop in `SwCfg` uses it after both GPIO writes. At 1 GHz one iteration is at least one cycle, so the wait is at least 300 ms. |
+| 11 | `tune.c` `TuneTx`, `tune.h` | `TuneTx` sent a 4-byte length and took the CRC’s address. `TuneRx` accepts a 1-byte length only for command `0x01`, and no length for `0x02` / `0x03` / `0x04`. `tune.c` called `memset` without `<string.h>`. `tune.h` had no prototypes. | One length byte whenever `len > 0` (reject `len > 255`). `len == 0` is header + cmd + CRC, which is what a host sends for `0x02` / `0x03` / `0x04`. CRC bytes are explicit little-endian. Log text uses command `0x0C`. Monitor replies use `0x02` / `0x03` / `0x04` with a length byte. Prototypes added. The main loop feeds UART bytes to `TuneRx`. Those commands only set flags; main calls the function and then clears the flag. |
+| 12 | `switch.c` `SwCfg` | Unused `uint8_t res`. | Removed. |
 
 Driver notes that used to live next to this file were merged into `doc/adsp21593_framework.md`. An older sport note had called the 4th `adi_sport_ConfigClock` argument InternalClock. In CCES 3.0.3 `adi_sport_2156x.h` the order is `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`. Every half-SPORT already passes `bUseIntlClock = false`. The SP1B `true` selects the falling edge and was not changed.
 
@@ -38,14 +35,16 @@ Driver notes that used to live next to this file were merged into `doc/adsp21593
 
 - `adi_core_enable(ADI_CORE_SHARC1)` in `sharc1.c` is the CCES template: Core 1 enables Core 2. `ADI_CORE_SHARC1` is the second SHARC.
 - SP1B `bFallingEdge = true` against SP1A `false` is the intentional setup/hold stagger. Do not retune it from this review.
-- `AD24281` is an empty stub. The official eval board has one A2B master. `Ad24281Init` stays commented out.
+- `Twi2DevRegLngWr` matches SAM `ad2425w_write_ctrl_reg_block`: MSB-first address (1, 2, or 4 bytes) with `adi_twi_Write(..., true)`, then the payload with `adi_twi_Write(..., false)`. Any other width returns before either write. `Twi2DevRegShtWr` stays the single-register form, one buffer `{reg, val}`.
+- The official eval board has one A2B master, AD24280. `Ad24280Init` plays `ad24280_cfg`. SPORT2 stays wired with no second transceiver.
 - SPU IDs 63–68 (SPORT), 29 (UART0), 79/80 (UART0 RX/TX DMA) match the EZ-KIT examples.
 - ADAU1962 `DAC_CTRL0 = 0x20` (TDM16, 48 kHz), `DAC_CTRL1 = 0x43`, `DAC_CTRL2 = 0x00`, PLL lock on `PLL_CLK_CTRL1` bit 2, final `PLL_CLK_CTRL0 = 0x05` (512×fs, matching 24.576 MHz `AUDIO_CLK`).
 - ADAU1979 PLL lock is bit 7; `PLL = 0x03` is the 512×fs / 32–48 kHz MCS. `CMAP12 = 0x01` and `CMAP34 = 0x23` swap adjacent channels versus reset `0x10` / `0x32`. Not proven wrong.
 - Switch programs the GPIO latch before `IODIR`, then releases active-low reset. That order avoids a glitch when the pins become outputs.
-- A2B `i == 1` polls `MSTR_RUNNING` (INTTYPE 255). A DELAY whose previous register is `0x13` polls `DSCDONE` (INTTYPE 24). Both match this 829-entry table: the first DELAY is index 1, and every `DISCVRY` is followed by a DELAY.
+- `Ad24280Init` opens TWI2, plays the discovery script, and closes TWI2. USBi is an I2C master on that bus and does not generate BCLK/FS. Before discovery, the DAC clocks are already running and USBi is unplugged. Software cannot see that USBi is still attached. The procedure is in section 3 of `doc/adsp21593_framework.md`.
+- A2B `i == 1` polls `MSTR_RUNNING` (INTTYPE 255). A DELAY whose previous register is `0x13` polls `DSCDONE` (INTTYPE 24). Both match this 829-entry table: the first DELAY is index 1, and every `DISCVRY` is followed by a DELAY. The scripted pause stays as written: `val_len == 2` uses `val_ptr[1]`, otherwise `val_ptr[0]`. Master-running and discovery keep polling until `TIME_BND`.
 - `val_width > 1` returns immediately. All 829 entries have width 1 and length 1, so this is a fail-fast, not a live bug.
-- `Uart0Rd` increments `underrun_cnt` on an empty buffer. `MonTmp` loops until empty, so the counter includes idle polls. `doc/adsp21593_framework.md` describes that.
+- `Uart0Rd` increments `underrun_cnt` on an empty buffer. The main loop reads until empty, so the counter includes idle polls. `doc/adsp21593_framework.md` describes that.
 - CPU load `cnt / 1000.f` is a relative unit, as `doc/adsp21593_framework.md` says.
 - `ack[]` / `nack[]` in `tune.c` are unused. CRC16 of command `0x05` is not `0x436F`. The intended payload is unknown, so the constants were not rewritten.
 - No SPI driver. Pinmux only claims TWI2 and UART0. DAI audio is the SRU, not `PORT` mux. No `adi_pwr_Init` in this tree; clocks are reset defaults plus the codec PLL.
@@ -77,7 +76,7 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 
 ## 中文
 
-固件里核实并改掉 15 处。旧的 sport 笔记把 `adi_sport_ConfigClock` 的第 4 参写成了 InternalClock，调用本身是对的，没有改沿。本机没有 ADI SHARC 工具链，没有做交叉编译。主机 `gcc` 只复现了 `ShtLog` 截断。
+固件里核实并改掉 12 处。旧的 sport 笔记把 `adi_sport_ConfigClock` 的第 4 参写成了 InternalClock，调用本身是对的，没有改沿。本机没有 ADI SHARC 工具链，没有做交叉编译。主机 `gcc` 只复现了 `ShtLog` 截断。
 
 ### 已修复
 
@@ -92,12 +91,9 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 | 7 | `log.c` `ShtLog` | 没有 `<stdarg.h>` / `<stdio.h>`，`va_list` 和 `vsnprintf` 未声明。`if (len > 128)` 差 1：截断时返回值 `>= sizeof(msg)`，按这个长度发送会读出 128 字节缓冲。 | 补上头文件。最多发送 127 字节。返回值 ≤ 0 不发送。 |
 | 8 | `ad2428.c`、`adau1962.c`、`adau1979.c`、`sport.c` | 调用可变参数 `ShtLog`，包含的却是没有原型的 `uart.h`。 | 改为 `log/log.h`。 |
 | 9 | `adau19790_reg.c` `SAI_CTRL0` | `0x23` 的 SAI=`100`（TDM16），FS=`011`（64–96 kHz）。本链路是 48 kHz。ADAU1979 的 FS=`010` 才是 32–48 kHz，对应 `0x22`。 | 改为 `0x22`。 |
-| 10 | `twi.c` `Twi2DevRegLngWr` | 两次 `adi_twi_Write`（地址带重复起始，再发数据）会开始第二次寻址写，从机把 `payload[0]` 当成寄存器地址。当前 829 条 A2B 表全是单字节写，走不到这条路径，函数本身是错的。 | 一次写入：地址按大端放 1/2/4 字节，再拼数据，数据最长 128 字节。更长或非法宽度直接返回。 |
-| 11 | `ad2428.c` `Ad2428Cfg` 的 DELAY | 两字节延时只用了 `val_ptr[1]`。SigmaStudio 的 16 位延时是大端。本表 15 条延时都是 1 字节，当前脚本行为不变。 | `val_len == 2` 时用 `(b0 << 8) \| b1`。空指针或空长度当作 0。 |
-| 12 | `ad2428.c` `Ad24280Init` | 发现流程不检查 DAC PLL 是否锁定，也不检查 TWI2 是否空闲。USBi 是 I2C 主机，不产生 BCLK/FS。 | `Adau1962ClkReady()` 与 `Twi2IsIdle()` 任一失败就返回。`Twi2Open` 在忙时拒绝第二次打开；`Twi2Stop` 在已空闲时什么都不做。软件看不出 USBi 还插着，必须先拔掉。 |
-| 13 | `switch.c` `Sw0Init` | 释放 `~ADAU_RESET` 之后只空转 65535 次 `nop`，不到 1 ms。ADAU1962A Rev. A 要求 PU/RST 拉高后 300 ms 才保证稳定。 | `Twi2Stop` 之后用 `__builtin_emuclk` 空转 3×10^8 个周期。CCLK ≤ 1 GHz 时不少于 300 ms。 |
-| 14 | `tune.c` `TuneTx`、`tune.h` | `TuneTx` 发送 4 字节长度，并把 CRC 的地址交给 `Uart0Wr`。`TuneRx` 只给命令 `0x01` 收 1 字节长度，`0x02` / `0x03` / `0x04` 没有长度。`memset` 没有 `<string.h>`。`tune.h` 没有原型。 | `0x01` 发 1 字节长度（`len > 255` 拒绝）。其它命令只发帧头 + cmd + CRC。CRC 按小端拆成两个字节。补上原型。`TuneRx` 仍未接到 `MonTmp`（`todo.md` 里的未完成项）。 |
-| 15 | `switch.c` `SwCfg` | 未使用的 `uint8_t res`。 | 删除。 |
+| 10 | `switch.c` `Sw0Init` | 释放 `~ADAU_RESET` 之后只空转 65535 次 `nop`，不到 1 ms。ADAU1962A Rev. A 要求 PU/RST 拉高后 300 ms 才保证稳定。 | `TIME_BND` 改为 300000000。`SwCfg` 里原有的 `nop` 循环在两次 GPIO 写之后都用它。按 CCLK 1 GHz、每次循环至少 1 个周期估算，不少于 300 ms。 |
+| 11 | `tune.c` `TuneTx`、`tune.h` | `TuneTx` 发送 4 字节长度，并把 CRC 的地址交给 `Uart0Wr`。`TuneRx` 只给命令 `0x01` 收 1 字节长度，`0x02` / `0x03` / `0x04` 没有长度。`memset` 没有 `<string.h>`。`tune.h` 没有原型。 | `len > 0` 时发 1 字节长度（`len > 255` 拒绝）。`len == 0` 是帧头 + cmd + CRC，主机下发的 `0x02` / `0x03` / `0x04` 就是这种。CRC 按小端拆成两个字节。日志文本用命令 `0x0C`。监视回包用 `0x02` / `0x03` / `0x04` 并带长度。补上原型。主循环把 UART 字节交给 `TuneRx`。这些命令只置标志，主循环调用函数后再清标志。 |
+| 12 | `switch.c` `SwCfg` | 未使用的 `uint8_t res`。 | 删除。 |
 
 原先分散的驱动笔记已并入 `doc/adsp21593_framework.md`。旧笔记把第 4 参标成 InternalClock。CCES 3.0.3 的 `adi_sport_2156x.h` 顺序是 `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`。六路半 SPORT 的 `bUseIntlClock` 本来就是 `false`。SP1B 的 `true` 是下降沿，没有改。
 
@@ -105,14 +101,16 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 
 - `sharc1.c` 里的 `adi_core_enable(ADI_CORE_SHARC1)` 是 CCES 模板：Core 1 打开 Core 2。`ADI_CORE_SHARC1` 是第二颗 SHARC。
 - SP1B `bFallingEdge = true`、SP1A 为 `false`，是有意的建立/保持时间错开。这次审查不去改沿。
-- `AD24281` 是空桩。官方评估板只有一路 A2B 主节点。`Ad24281Init` 保持注释。
+- `Twi2DevRegLngWr` 与 SAM 的 `ad2425w_write_ctrl_reg_block` 一致：地址按大端放 1、2 或 4 字节，`adi_twi_Write(..., true)`，再对数据 `adi_twi_Write(..., false)`。其它宽度在两次写之前返回。`Twi2DevRegShtWr` 仍是单寄存器形式，一次写 `{reg, val}`。
+- 官方评估板只有一路 A2B 主节点 AD24280。`Ad24280Init` 回放 `ad24280_cfg`。SPORT2 仍接着，没有第二颗收发器。
 - SPU 编号 63–68（SPORT）、29（UART0）、79/80（UART0 RX/TX DMA）与 EZ-KIT 例程一致。
 - ADAU1962：`DAC_CTRL0 = 0x20`（TDM16、48 kHz），`DAC_CTRL1 = 0x43`，`DAC_CTRL2 = 0x00`，锁相在 `PLL_CLK_CTRL1` bit 2，最终 `PLL_CLK_CTRL0 = 0x05`（512×fs，对应 24.576 MHz `AUDIO_CLK`）。
 - ADAU1979 锁相是 bit 7；`PLL = 0x03` 是 512×fs / 32–48 kHz 的 MCS。`CMAP12 = 0x01`、`CMAP34 = 0x23` 相对复位值 `0x10` / `0x32` 交换了相邻通道，没有证据说明这是错的。
 - switch 先写 GPIO 锁存再写 `IODIR`，然后释放低有效复位。方向从输入变成输出时这样不会毛刺。
-- A2B 在 `i == 1` 轮询 `MSTR_RUNNING`（INTTYPE 255）。前一条寄存器是 `0x13` 的 DELAY 轮询 `DSCDONE`（INTTYPE 24）。这张 829 条表的第一条 DELAY 就在下标 1，每次 `DISCVRY` 后面都跟着 DELAY。
+- `Ad24280Init` 打开 TWI2、回放发现脚本、再关闭 TWI2。USBi 是这条总线上的 I2C 主机，不产生 BCLK/FS。发现之前 DAC 的时钟已经出来，USBi 已经拔掉。软件看不出 USBi 还插着。做法写在 `doc/adsp21593_framework.md` 第 3 节。
+- A2B 在 `i == 1` 轮询 `MSTR_RUNNING`（INTTYPE 255）。前一条寄存器是 `0x13` 的 DELAY 轮询 `DSCDONE`（INTTYPE 24）。这张 829 条表的第一条 DELAY 就在下标 1，每次 `DISCVRY` 后面都跟着 DELAY。脚本里的忙等按原样保留：`val_len == 2` 取 `val_ptr[1]`，否则取 `val_ptr[0]`。主节点运行和从节点发现会一直轮询到 `TIME_BND`。
 - `val_width > 1` 会立刻返回。829 条的宽度和长度都是 1，这是失败即停，不是当前表上的缺陷。
-- `Uart0Rd` 在缓冲空时增加 `underrun_cnt`。`MonTmp` 一直读到空，所以计数包含空闲轮询。`doc/adsp21593_framework.md` 已经这样写。
+- `Uart0Rd` 在缓冲空时增加 `underrun_cnt`。主循环一直读到空，所以计数包含空闲轮询。`doc/adsp21593_framework.md` 已经这样写。
 - CPU 负载 `cnt / 1000.f` 是相对单位，`doc/adsp21593_framework.md` 已说明。
 - `tune.c` 的 `ack[]` / `nack[]` 没有被使用。命令 `0x05` 的 CRC16 不是 `0x436F`。想发的负载不清楚，所以没有改这两个常量。
 - 没有 SPI 驱动。管脚复用只声明了 TWI2 和 UART0。音频走 SRU，不走 `PORT` 复用。工程里没有 `adi_pwr_Init`；时钟是复位默认值加上 codec PLL。

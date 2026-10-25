@@ -25,7 +25,7 @@ It is **not** a product SDK and is **not** affiliated with any automotive OEM or
 - **ADZS-21593-EZKIT** / **SOM-21593** — ADSP-21593 System-on-Module
 - **SOMCRR-EZKIT** — SOM Carrier Board (EZKIT)
 
-**A2B:** the official 21593 eval stack exposes **one** A2B master path (`AD24280`). There is **no second on-board A2B** (`AD24281` is an empty stub only).
+**A2B:** the official 21593 eval stack exposes **one** A2B master path (`AD24280`). There is no second on-board A2B.
 
 ### Roadmap
 
@@ -90,8 +90,7 @@ Two files under [`doc/`](doc/):
 On the **official ADSP-21593 eval path** (ADZS-21593-EZKIT / SOM-21593 + SOMCRR-EZKIT):
 
 - **One** on-board A2B master: **AD24280** (I2C `0x68` / `0x69`), config table **829** entries.
-- **AD24281** is an **empty stub** — no second A2B transceiver; `Ad24281Init()` is commented in `AudioFlowInit()`.
-- **SPORT2** (A2B1) remains in code for legacy/topology reuse but has **no second A2B** on this hardware.
+- **SPORT2** (A2B1) remains wired, but this board has **no second A2B**. `Ad24280Init` plays `ad24280_cfg`.
 
 ### Key constants (single source)
 
@@ -124,7 +123,7 @@ Defined in `sport.h`:
 - **ADZS-21593-EZKIT** / **SOM-21593**
 - **SOMCRR-EZKIT** 载板
 
-**A2B 说明：** 官方 21593 评估套件只有 **一路** A2B Master（`AD24280`）。板上**没有第二路 A2B**（`AD24281` 仅为空桩）。
+**A2B 说明：** 官方 21593 评估套件只有 **一路** A2B Master（`AD24280`）。板上没有第二路 A2B。
 
 ### 路线图
 
@@ -163,7 +162,7 @@ framework/
 
 ### 评估板说明
 
-官方板仅 **AD24280** 一路 A2B；**AD24281 空桩**；`Ad24281Init()` 在 `AudioFlowInit()` 中已注释。
+官方板仅 **AD24280** 一路 A2B。`Ad24280Init` 回放 `ad24280_cfg`。
 
 ### 关键常量
 

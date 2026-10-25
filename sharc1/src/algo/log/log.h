@@ -1,5 +1,7 @@
 /*
- * log.h ? short UART log helper (ShtLog declared for callers via include path / C linkage).
+ * UART log helpers.
+ * ShtLog writes the formatted text through TuneTx, command 0x0C.
+ * LngLog writes "file:line level message". File and line come from the call.
  */
 
 #ifndef ALGO_LOG_LOG_H_
@@ -12,7 +14,11 @@ extern "C" {
 #endif
 
 uint8_t ShtLog(const char* format, ...);
-uint8_t LngLog(const char* level, const char* format, ...);
+uint8_t LngLogAt(const char* file, int line, const char* level,
+                 const char* format, ...);
+
+/* level is a caller string such as "E". The format follows, then its args. */
+#define LngLog(level, ...) LngLogAt(__FILE__, __LINE__, (level), __VA_ARGS__)
 
 #ifdef __cplusplus
 }

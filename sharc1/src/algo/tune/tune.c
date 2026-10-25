@@ -1,28 +1,25 @@
+#include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "uart/uart.h"
-#include "ad2428/ad2428.h"
-#include "sport/sport.h"
+#include "tune.h"
 
-// 00: writeback test.
-// 01: a2b mon
-// 02: uart mon
-// 03: cpu load mon
-// 04: para upl
-// 05: ack
-// 06: nack
-// 07: para dnl
-// 08: stats upl
-// 09: stats rst
-// 0A: algo type
-// 0B:
-// 0C
+// 0x01: writeback on. No payload. The same frame turns it off.
+// 0x02: a2b mon. Host request has no payload. Reply is length + text.
+// 0x03: uart mon. Same request/reply split as 0x02.
+// 0x04: cpu load mon. Same request/reply split as 0x02.
+// 0x05: ack
+// 0x06: nack
+// 0x07: para dnl
+// 0x08: stats upl
+// 0x09: stats rst
+// 0x0A: algo type
+// 0x0C: log text, device to host, 1-byte length
 
 #define MAX_PAYLOAD_LEN   (512u)
 
 typedef struct TuneSt {
-  uint8_t test_flag;
+  uint8_t wb_flag;
   uint8_t a2b_mon_flag;
   uint8_t uart_mon_flag;
   uint8_t cpu_load_mon_flag;
@@ -139,16 +136,16 @@ static inline uint16_t Crc16Update(uint16_t cur_crc, uint8_t byte) {
 
 static ParseSt CmdProc(uint8_t cmd) {
   switch (cmd) {
-    case 0x01:
-      return kLen;
-
-    case 0x02:
+    case TUNE_CMD_WB:
       return kCrcLo;
 
-    case 0x03:
+    case TUNE_CMD_A2B_MON:
       return kCrcLo;
 
-    case 0x04:
+    case TUNE_CMD_UART_MON:
+      return kCrcLo;
+
+    case TUNE_CMD_CPU_MON:
       return kCrcLo;
 
     default:
@@ -158,19 +155,19 @@ static ParseSt CmdProc(uint8_t cmd) {
 
 static void CrcProc(uint8_t cmd) {
   switch (cmd) {
-    case 0x01:
-      st.test_flag = 1;
+    case TUNE_CMD_WB:
+      st.wb_flag = 1;
       break;
 
-    case 0x02:
+    case TUNE_CMD_A2B_MON:
       st.a2b_mon_flag = 1;
       break;
 
-    case 0x03:
+    case TUNE_CMD_UART_MON:
       st.uart_mon_flag = 1;
       break;
 
-    case 0x04:
+    case TUNE_CMD_CPU_MON:
       st.cpu_load_mon_flag = 1;
       break;
 
@@ -179,16 +176,14 @@ static void CrcProc(uint8_t cmd) {
   }
 };
 
-// Flag set, write back, ack, data dnl or upl.
-// Data op will block for long time, ensure upper won't repeat before ack.
-// Data op success should copy to flash to save old para ensure won't be destroy
-// by bad rx, once bad rx, reverse to old para so we can get better control.
-static void TuneProc(uint8_t* data) {
-  if (st.a2b_mon_flag) {
-
-  }
-  memset(&st, 0, sizeof(st));
-};
+uint8_t TuneA2bMonFlag(void) { return st.a2b_mon_flag; }
+void TuneA2bMonFlagClr(void) { st.a2b_mon_flag = 0u; }
+uint8_t TuneUartMonFlag(void) { return st.uart_mon_flag; }
+void TuneUartMonFlagClr(void) { st.uart_mon_flag = 0u; }
+uint8_t TuneCpuMonFlag(void) { return st.cpu_load_mon_flag; }
+void TuneCpuMonFlagClr(void) { st.cpu_load_mon_flag = 0u; }
+uint8_t TuneWbFlag(void) { return st.wb_flag; }
+void TuneWbFlagClr(void) { st.wb_flag = 0u; }
 
 void TuneRx(uint8_t byte) {
   static ParseSt state = kHeader1;
@@ -249,7 +244,6 @@ void TuneRx(uint8_t byte) {
 
       if (crc_rx == crc_calc) {
         CrcProc(packet.cmd);
-        TuneProc(packet.payload);
       }
       state = kHeader1;
       break;
@@ -261,38 +255,41 @@ void TuneRx(uint8_t byte) {
   }
 };
 
-void TuneTx(uint8_t cmd, uint8_t* data, uint32_t len) {
+/* One framed write. len == 0 is header + cmd + CRC. len > 0 adds one length
+ * byte and the payload. CRC covers cmd, the length byte, and the payload. */
+uint8_t TuneTx(uint8_t cmd, uint8_t* data, uint32_t len) {
   uint32_t i;
   uint16_t crc16 = 0xFFFF;
   uint8_t len8;
   uint8_t crc_bytes[2];
 
-  /* TuneRx accepts a 1-byte length only for command 0x01. Commands 0x02,
-   * 0x03 and 0x04 are header + cmd + CRC. A 4-byte length does not match
-   * either form, and neither does the host endianness of a uint32_t. */
-  if (cmd == 0x01u) {
-    if (len > 255u || (len > 0u && data == NULL)) {
-      return;
-    }
+  if (len > 255u || (len > 0u && data == NULL)) {
+    return 1u;
   }
 
-  Uart0Wr(header, 2);
-  Uart0Wr(&cmd, 1);
+  if (Uart0Wr(header, 2u) != 0u) {
+    return 1u;
+  }
+  if (Uart0Wr(&cmd, 1u) != 0u) {
+    return 1u;
+  }
   crc16 = Crc16Update(crc16, cmd);
 
-  if (cmd == 0x01u) {
+  if (len > 0u) {
     len8 = (uint8_t)len;
-    Uart0Wr(&len8, 1u);
+    if (Uart0Wr(&len8, 1u) != 0u) {
+      return 1u;
+    }
     crc16 = Crc16Update(crc16, len8);
-    if (len > 0u) {
-      Uart0Wr(data, len);
-      for (i = 0u; i < len; ++i) {
-        crc16 = Crc16Update(crc16, data[i]);
-      }
+    if (Uart0Wr(data, len) != 0u) {
+      return 1u;
+    }
+    for (i = 0u; i < len; ++i) {
+      crc16 = Crc16Update(crc16, data[i]);
     }
   }
 
   crc_bytes[0] = (uint8_t)(crc16 & 0xFFu);
   crc_bytes[1] = (uint8_t)(crc16 >> 8);
-  Uart0Wr(crc_bytes, 2u);
+  return Uart0Wr(crc_bytes, 2u);
 };

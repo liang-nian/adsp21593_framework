@@ -6,9 +6,7 @@ extern "C" {
 #endif
 
 void Ad24280Mon(void);
-void Ad24281Mon(void);
 void Ad24280Init(void);
-void Ad24281Init(void);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -9,8 +9,6 @@ extern "C" {
 
 void Twi2Open(void);
 
-uint8_t Twi2IsIdle(void);
-
 void Twi2DevAddrSet(uint8_t dev);
 
 void Twi2DevRegShtWr(uint8_t dev, uint8_t reg, uint8_t val);
