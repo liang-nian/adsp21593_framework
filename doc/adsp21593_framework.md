@@ -73,7 +73,7 @@ RTS/CTS 只是复用到了引脚，UART 驱动没有打开硬件流控。
 1. `adi_initComponents()`（`sharc1/system/adi_initialize.c`）：`adi_sec_Init()`，然后 `adi_initpinmux()`，然后 `adi_mcapi_Init()`。
 2. `adi_core_enable(ADI_CORE_SHARC1)`。这是 CCES 模板：正在跑的 Core 1 打开第二颗 SHARC。枚举名 `ADI_CORE_SHARC1` 指的是 Core 2，不是把本核再打开一次。
 3. `AudioFlowInit()`。
-4. `while (1)`。主循环把 UART 字节交给 `TuneRx`。监视和切换 A2B 配置在 tune 里只置位；主循环看到标志就调用对应函数，然后清掉标志。音频不在主循环里跑。
+4. `while (1)`。每次都 `LinkRx`，再调用三个监视函数。`0x01` 置 `wb_flag`，负载按帧回写。音频不在主循环里跑。
 
 `AudioFlowInit`（`audio_flow.c`）的顺序有依赖，不能对调：
 
@@ -179,7 +179,7 @@ DMA 缓冲是 **time-major** int32：`buf[i * 时隙数 + j]`。算法看到的 
 | 4–7 | `Harm1000()`，1 kHz 正弦，相位步进 `1000/48000` |
 | 8–11 | A2B 输入槽 0/2/1/3，把两根 TDM16 上的相邻槽交错放出来听 |
 
-主循环把 UART 字节送进 `TuneRx`。CRC 正确后只置标志：`0x01` 打开回写，`0x02` 读 A2B 中断和误码，`0x03` 打印 UART underrun/overrun，`0x04` 打印 SPORT 回调里用 `emuclk` 差除以 1000 的相对负载。回写打开后这条循环不再调用 `TuneRx`，读到的字节立刻 `Uart0Wr` 回去。同一帧 `5A A5 01 7E 80` 再出现一次就关掉回写。其余标志由主循环调用 `Ad24280Mon`、`Uart0Mon` 或 `CpuMsgMon`，再把对应标志清掉。这三路监视的文本由 `TuneTx` 按各自的命令号发回。
+`LinkRx` 一直把 UART 读空。命令是 `0x01` 时置 `wb_flag`。长度收齐后 `LinkTxStart` 先发帧头、命令和 4 字节小端长度。`kPayload` 只在 `wb_flag` 置位时用 `LinkTxData` 把这个字节写进回包，`total_len` 随之减少。负载结束时 `LinkTxEnd` 看到 `total_len` 为 0 才发 CRC，否则 `LngLog`。CRC 正确后：`0x02` 调 `Ad24280MonReq`，`0x03` 调 `Uart0MonReq`，`0x04` 调 `CpuMsgMonReq`。标志在各自的 msg 里。主循环调用 `Ad24280Mon`、`Uart0Mon`、`CpuMsgMon`，函数自己看标志，执行完清掉。监视和日志走 `LinkTx`，它内部就是这三步。
 
 ---
 
@@ -248,19 +248,19 @@ UART 的 DMA 通道号是这颗片子固定的。ADSP-21593 上 UART0 RX 是 **D
 
 `Uart0Wr` 拒绝空指针和 0 长度。超过 512 就分块，每块等 `ADI_UART_EVENT_TX_PROCESSED`。长度刚好是 512 的倍数时不再补一次 0 长度的 DMA。每次等待的超时是 `0x1000000` 次空转，独立重装。
 
-`ShtLog` 把 `vsnprintf` 的结果交给 `TuneTx`，命令 `0x0C`。缓冲 128 字节，截断时只发 127 字节，不含结尾的 NUL。`LngLog(level, format, ...)` 用同一块缓冲，先写 `文件名:行号 级别 `，再接格式化后的信息。文件名和行号由宏从调用点填入；`__FILE__` 只留最后一级，避免整条路径把 128 字节占满。级别是调用者传入的字符串。信息过长时同样只发 127 字节。
+`ShtLog` 把 `vsnprintf` 的结果交给 `LinkTx`，命令 `0x0C`。缓冲 128 字节，截断时只发 127 字节，不含结尾的 NUL。`LngLog(level, format, ...)` 用同一块缓冲，先写 `文件名:行号 级别 `，再接格式化后的信息。文件名和行号由宏从调用点填入；`__FILE__` 只留最后一级，避免整条路径把 128 字节占满。级别是调用者传入的字符串。信息过长时同样只发 127 字节。
 
-监视回包和日志都经 `TuneTx` 发出，帧格式与下面这张表相同。`Ad24280Mon` 用 `0x02`，`Uart0Mon` 用 `0x03`，`CpuMsgMon` 用 `0x04`。每一行文本是一帧。
+监视回包和日志都经 `LinkTx` 发出，帧格式与下面这张表相同。`Ad24280Mon` 用 `0x02`，`Uart0Mon` 用 `0x03`，`CpuMsgMon` 用 `0x04`。每一行文本是一帧。
 
 | 字段 | 宽度 | 含义 |
 |------|------|------|
 | 帧头 | 2 | 固定 `5A A5`，不进入 CRC |
 | cmd | 1 | CRC 从这里开始，初值 `0xFFFF`，Modbus CRC16 |
-| len | 0 或 1 | `len > 0` 时有 1 字节长度。主机下发的 `0x01`–`0x04` 没有负载，所以没有这一字节。日志 `0x0C` 和监视回包有负载 |
-| payload | len | `0x0C` 和监视回包是文本。`TuneTx` 拒绝 len > 255。回写打开后，输入字节不走这张表，原样读出再写回 |
-| CRC | 2 | 低字节在前。覆盖 cmd、长度字节和 payload |
+| len | 0 或 4 | `len > 0` 时是 4 字节小端长度。主机下发的 `0x02`–`0x04` 没有负载，所以没有这 4 字节。`0x01`、日志 `0x0C` 和监视回包有负载 |
+| payload | len | `0x01` 在 `wb_flag` 下按 `LinkTxData` 写入回包，不在 `link` 里留一份。`0x0C` 和监视回包是文本。`Uart0Wr` 超过 512 字节时分块 |
+| CRC | 2 | 低字节在前。覆盖 cmd、4 字节长度和 payload |
 
-CRC 正确后只把标志置上。主循环执行完再清标志。参数上传还没做。`ack[]` 和 `nack[]` 没有被发送。
+CRC 正确后调用对应模块把标志置上。对不上就 `ShtLog` 一条 `crc fail`，带上命令号、收到的 CRC 和算出的 CRC，命令不执行。监视函数执行完再清自己的标志。参数上传还没做。`ack[]` 和 `nack[]` 没有被发送。
 
 ### 2.2 I2C / TWI
 
@@ -865,7 +865,7 @@ flowchart LR
 
 **定时器没配就没有 UART 接收。** `Uart0Poll` 不在字节中断里。TMR0 没按 1 ms 跑，写指针停住，`Uart0Rd` 永远看到空缓冲。
 
-**不要在音频回调里大量打日志。** `TuneTx` 里的 `Uart0Wr` 会忙等 TX 完成。`ShtLog` 放在 `AudioProcess` 里会把 1 ms 的块周期吃掉。
+**不要在音频回调里大量打日志。** `LinkTx` 里的 `Uart0Wr` 会忙等 TX 完成。`ShtLog` 放在 `AudioProcess` 里会把 1 ms 的块周期吃掉。
 
 **SP2 接了线，没有芯片。** 官方板只有 AD24280 这一路 A2B。不要拿第二路 SPORT 做通过标准。
 

@@ -1,12 +1,12 @@
-"""Tune UART frames used by sharc1/src/algo/tune/tune.c.
+"""UART frames used by sharc1/src/algo/link/link.c.
 
 Host request:
-  5A A5 | cmd | [len] | [payload] | crc_lo | crc_hi
-CRC is Modbus CRC16, init 0xFFFF, and covers cmd, the length byte, and the payload.
-0x01, 0x02, 0x03 and 0x04 have no length byte.
-0x01 turns device echo on. The same frame turns it off.
-While echo is on, typed bytes are raw UART, not this frame.
-Device text (0x02, 0x03, 0x04, 0x0C) is sent back with a length byte.
+  5A A5 | cmd | [len_le32] | [payload] | crc_lo | crc_hi
+CRC is Modbus CRC16, init 0xFFFF, and covers cmd, the length bytes, and the payload.
+0x02, 0x03 and 0x04 have no length field.
+0x01 is a writeback payload. The device echoes it as another 0x01 frame:
+header, command, 4-byte little-endian length, payload, CRC.
+Device logs and monitor replies (0x02, 0x03, 0x04, 0x0C) use the same length.
 """
 
 CMD_WB = 0x01
@@ -16,7 +16,9 @@ CMD_CPU_MON = 0x04
 CMD_LOG = 0x0C
 
 HEADER = b"\x5A\xA5"
-MAX_PAYLOAD = 255
+LEN_WIDTH = 4
+# Host stops waiting on a frame longer than this. The device does not store it.
+MAX_PAYLOAD = 8192
 
 CMD_NAME = {
     CMD_WB: "writeback",
@@ -26,8 +28,8 @@ CMD_NAME = {
     CMD_LOG: "log",
 }
 
-# Device-to-host frames that carry a 1-byte length.
-_RX_WITH_LEN = {CMD_A2B_MON, CMD_UART_MON, CMD_CPU_MON, CMD_LOG}
+# Device-to-host frames that carry a 4-byte little-endian length.
+_RX_WITH_LEN = {CMD_WB, CMD_A2B_MON, CMD_UART_MON, CMD_CPU_MON, CMD_LOG}
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -43,22 +45,24 @@ def crc16_modbus(data: bytes) -> int:
     return crc
 
 
-def build_frame(cmd: int, payload: bytes | None) -> bytes:
-    """payload is None when the command has no length byte."""
+def build_frame(cmd: int, payload: bytes | None, bad_crc: bool = False) -> bytes:
+    """payload is None when the command has no length byte.
+    bad_crc flips every CRC bit so the frame cannot check out."""
     body = bytes([cmd & 0xFF])
     if payload is not None:
-        if len(payload) > MAX_PAYLOAD:
-            raise ValueError("payload longer than 255")
-        body += bytes([len(payload)]) + payload
+        body += len(payload).to_bytes(LEN_WIDTH, "little") + payload
     crc = crc16_modbus(body)
+    if bad_crc:
+        crc ^= 0xFFFF
     return HEADER + body + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
 
 
 class Frame:
-    def __init__(self, cmd: int, payload: bytes, ok: bool):
+    def __init__(self, cmd: int, payload: bytes, ok: bool, raw: bytes = b""):
         self.cmd = cmd
         self.payload = payload
         self.ok = ok
+        self.raw = raw
 
     @property
     def name(self) -> str:
@@ -97,16 +101,20 @@ class Parser:
         cmd = self.buf[2]
         if cmd not in _RX_WITH_LEN:
             return False
-        if len(self.buf) < 4:
+        if len(self.buf) < 3 + LEN_WIDTH:
             return None
-        length = self.buf[3]
-        need = 6 + length
+        length = int.from_bytes(self.buf[3:3 + LEN_WIDTH], "little")
+        if length > MAX_PAYLOAD:
+            return False
+        need = 3 + LEN_WIDTH + length + 2
         if len(self.buf) < need:
             return None
-        body = self.buf[2:4 + length]
-        crc_rx = self.buf[4 + length] | (self.buf[5 + length] << 8)
+        body = self.buf[2:3 + LEN_WIDTH + length]
+        crc_at = 3 + LEN_WIDTH + length
+        crc_rx = self.buf[crc_at] | (self.buf[crc_at + 1] << 8)
         if crc16_modbus(body) != crc_rx:
             return False
-        payload = self.buf[4:4 + length]
+        payload = self.buf[3 + LEN_WIDTH:crc_at]
+        raw = bytes(self.buf[:need])
         self.buf = self.buf[need:]
-        return Frame(cmd, payload, True)
+        return Frame(cmd, payload, True, raw)

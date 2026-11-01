@@ -26,7 +26,7 @@ Twelve firmware defects were fixed. One note mis-named a SPORT argument; the cal
 | 8 | `ad2428.c`, `adau1962.c`, `adau1979.c`, `sport.c` | They call variadic `ShtLog` but included `uart.h`, which does not prototype it. | Include `log/log.h`. |
 | 9 | `adau19790_reg.c` `SAI_CTRL0` | `0x23` is SAI=`100` (TDM16) and FS=`011` (64–96 kHz). This path is 48 kHz. ADAU1979 FS=`010` is 32–48 kHz, so the byte is `0x22`. | Program `0x22`. |
 | 10 | `switch.c` `Sw0Init` | After releasing `~ADAU_RESET` the only wait was 65535 `nop`s, well under 1 ms. ADAU1962A Rev. A requires 300 ms after PU/RST before the part is guaranteed stable. | `TIME_BND` is 300000000. The existing `nop` loop in `SwCfg` uses it after both GPIO writes. At 1 GHz one iteration is at least one cycle, so the wait is at least 300 ms. |
-| 11 | `tune.c` `TuneTx`, `tune.h` | `TuneTx` sent a 4-byte length and took the CRC’s address. `TuneRx` accepts a 1-byte length only for command `0x01`, and no length for `0x02` / `0x03` / `0x04`. `tune.c` called `memset` without `<string.h>`. `tune.h` had no prototypes. | One length byte whenever `len > 0` (reject `len > 255`). `len == 0` is header + cmd + CRC, which is what a host sends for `0x02` / `0x03` / `0x04`. CRC bytes are explicit little-endian. Log text uses command `0x0C`. Monitor replies use `0x02` / `0x03` / `0x04` with a length byte. Prototypes added. The main loop feeds UART bytes to `TuneRx`. Those commands only set flags; main calls the function and then clears the flag. |
+| 11 | `link.c` `LinkTx`, `link.h` | `LinkTx` passed the CRC variable’s address to `Uart0Wr`. The length field on the wire did not match `uint32_t len`. `link.c` called `memset` without `<string.h>`. `link.h` had no prototypes. | `len > 0` sends 4 little-endian length bytes and the whole payload. `Uart0Wr` splits that write at 512. `len == 0` is header + cmd + CRC, which is what a host sends for `0x02` / `0x03` / `0x04`. CRC bytes are explicit little-endian. `0x01` sets `wb_flag`. The echo frame is `LinkTxStart`, `LinkTxData`, then `LinkTxEnd`. `LinkTxEnd` sends the CRC only when the remaining length is 0. Log text uses command `0x0C`. Monitor replies use `0x02` / `0x03` / `0x04` with a length field. Prototypes added. |
 | 12 | `switch.c` `SwCfg` | Unused `uint8_t res`. | Removed. |
 
 Driver notes that used to live next to this file were merged into `doc/adsp21593_framework.md`. An older sport note had called the 4th `adi_sport_ConfigClock` argument InternalClock. In CCES 3.0.3 `adi_sport_2156x.h` the order is `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`. Every half-SPORT already passes `bUseIntlClock = false`. The SP1B `true` selects the falling edge and was not changed.
@@ -46,7 +46,7 @@ Driver notes that used to live next to this file were merged into `doc/adsp21593
 - `val_width > 1` returns immediately. All 829 entries have width 1 and length 1, so this is a fail-fast, not a live bug.
 - `Uart0Rd` increments `underrun_cnt` on an empty buffer. The main loop reads until empty, so the counter includes idle polls. `doc/adsp21593_framework.md` describes that.
 - CPU load `cnt / 1000.f` is a relative unit, as `doc/adsp21593_framework.md` says.
-- `ack[]` / `nack[]` in `tune.c` are unused. CRC16 of command `0x05` is not `0x436F`. The intended payload is unknown, so the constants were not rewritten.
+- `ack[]` / `nack[]` in `link.c` are unused. CRC16 of command `0x05` is not `0x436F`. The intended payload is unknown, so the constants were not rewritten.
 - No SPI driver. Pinmux only claims TWI2 and UART0. DAI audio is the SRU, not `PORT` mux. No `adi_pwr_Init` in this tree; clocks are reset defaults plus the codec PLL.
 - UART divisor 136 at the 125 MHz SCLK assumed by `timer.c` is 125e6/136 ≈ 919118 baud, about 0.27% below 921600. That is the nearest integer divisor, not a defect.
 
@@ -92,7 +92,7 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 | 8 | `ad2428.c`、`adau1962.c`、`adau1979.c`、`sport.c` | 调用可变参数 `ShtLog`，包含的却是没有原型的 `uart.h`。 | 改为 `log/log.h`。 |
 | 9 | `adau19790_reg.c` `SAI_CTRL0` | `0x23` 的 SAI=`100`（TDM16），FS=`011`（64–96 kHz）。本链路是 48 kHz。ADAU1979 的 FS=`010` 才是 32–48 kHz，对应 `0x22`。 | 改为 `0x22`。 |
 | 10 | `switch.c` `Sw0Init` | 释放 `~ADAU_RESET` 之后只空转 65535 次 `nop`，不到 1 ms。ADAU1962A Rev. A 要求 PU/RST 拉高后 300 ms 才保证稳定。 | `TIME_BND` 改为 300000000。`SwCfg` 里原有的 `nop` 循环在两次 GPIO 写之后都用它。按 CCLK 1 GHz、每次循环至少 1 个周期估算，不少于 300 ms。 |
-| 11 | `tune.c` `TuneTx`、`tune.h` | `TuneTx` 发送 4 字节长度，并把 CRC 的地址交给 `Uart0Wr`。`TuneRx` 只给命令 `0x01` 收 1 字节长度，`0x02` / `0x03` / `0x04` 没有长度。`memset` 没有 `<string.h>`。`tune.h` 没有原型。 | `len > 0` 时发 1 字节长度（`len > 255` 拒绝）。`len == 0` 是帧头 + cmd + CRC，主机下发的 `0x02` / `0x03` / `0x04` 就是这种。CRC 按小端拆成两个字节。日志文本用命令 `0x0C`。监视回包用 `0x02` / `0x03` / `0x04` 并带长度。补上原型。主循环把 UART 字节交给 `TuneRx`。这些命令只置标志，主循环调用函数后再清标志。 |
+| 11 | `link.c` `LinkTx`、`link.h` | `LinkTx` 把 CRC 变量的地址交给 `Uart0Wr`。线上的长度字段和 `uint32_t len` 对不上。`memset` 没有 `<string.h>`。`link.h` 没有原型。 | `len > 0` 时发 4 字节小端长度，负载整段交给 `Uart0Wr`，超过 512 由它分块。`len == 0` 是帧头 + cmd + CRC，主机下发的 `0x02` / `0x03` / `0x04` 就是这种。CRC 按小端拆成两个字节。`0x01` 置 `wb_flag`。回包是 `LinkTxStart`、`LinkTxData`、`LinkTxEnd`。`LinkTxEnd` 只在剩余长度为 0 时发 CRC。日志文本用命令 `0x0C`。监视回包用 `0x02` / `0x03` / `0x04` 并带长度。补上原型。 |
 | 12 | `switch.c` `SwCfg` | 未使用的 `uint8_t res`。 | 删除。 |
 
 原先分散的驱动笔记已并入 `doc/adsp21593_framework.md`。旧笔记把第 4 参标成 InternalClock。CCES 3.0.3 的 `adi_sport_2156x.h` 顺序是 `(h, nClockRatio, bUseIntlClock, bFallingEdge, bGatedClk)`。六路半 SPORT 的 `bUseIntlClock` 本来就是 `false`。SP1B 的 `true` 是下降沿，没有改。
@@ -112,7 +112,7 @@ To build the firmware: CrossCore Embedded Studio with the SHARC toolchain, proce
 - `val_width > 1` 会立刻返回。829 条的宽度和长度都是 1，这是失败即停，不是当前表上的缺陷。
 - `Uart0Rd` 在缓冲空时增加 `underrun_cnt`。主循环一直读到空，所以计数包含空闲轮询。`doc/adsp21593_framework.md` 已经这样写。
 - CPU 负载 `cnt / 1000.f` 是相对单位，`doc/adsp21593_framework.md` 已说明。
-- `tune.c` 的 `ack[]` / `nack[]` 没有被使用。命令 `0x05` 的 CRC16 不是 `0x436F`。想发的负载不清楚，所以没有改这两个常量。
+- `link.c` 的 `ack[]` / `nack[]` 没有被使用。命令 `0x05` 的 CRC16 不是 `0x436F`。想发的负载不清楚，所以没有改这两个常量。
 - 没有 SPI 驱动。管脚复用只声明了 TWI2 和 UART0。音频走 SRU，不走 `PORT` 复用。工程里没有 `adi_pwr_Init`；时钟是复位默认值加上 codec PLL。
 - `timer.c` 按 SCLK 125 MHz 估算时，除数 136 得到 125e6/136 ≈ 919118 baud，比 921600 低约 0.27%。这是最近的整数除数，不是缺陷。
 

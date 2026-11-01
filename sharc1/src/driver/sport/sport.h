@@ -16,6 +16,7 @@ float* a2b0_out(void);
 float* a2b1_in(void);
 float* a2b1_out(void);
 void CpuMsgMon(void);
+void CpuMsgMonReq(void);
 void SpInit(void);
 
 #ifdef __cplusplus

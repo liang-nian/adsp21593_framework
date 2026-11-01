@@ -8,7 +8,7 @@
 
 #include "sport.h"
 #include "audio_flow/audio_flow.h"
-#include "tune/tune.h"
+#include "link/link.h"
 
 #define SP0A_DEV        (0u) // to dac
 #define SP0B_DEV        (0u) // from adc
@@ -30,6 +30,7 @@ typedef struct SpMsg {
   float a2b0_out_[TDM_A2B * FRAME_LEN];
   float a2b1_in_[TDM_A2B * FRAME_LEN];
   float a2b1_out_[TDM_A2B * FRAME_LEN];
+  uint8_t mon_flag;
 } SpMsg;
 
 #pragma default_section(ALLDATA, "seg_l1_block1")
@@ -122,10 +123,18 @@ static void CpuMonTx(const char* format, ...) {
   if ((size_t)len >= sizeof(text)) {
     len = (int)sizeof(text) - 1;
   }
-  TuneTx(TUNE_CMD_CPU_MON, (uint8_t*)text, (uint32_t)len);
+  LinkTx(LINK_CMD_CPU_MON, (uint8_t*)text, (uint32_t)len);
+};
+
+void CpuMsgMonReq(void) {
+  msg.mon_flag = 1u;
 };
 
 void CpuMsgMon(void) {
+  if (!msg.mon_flag) {
+    return;
+  }
+  msg.mon_flag = 0u;
   CpuMonTx("cpu load: %.3f.\n", msg.cpu_load_);
   CpuMonTx("max cpu load: %.3f.\n", msg.max_cpu_load_);
   CpuMonTx("ave cpu load: %.3f.\n", msg.ave_cpu_load_);

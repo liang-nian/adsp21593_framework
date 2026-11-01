@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 #include "log/log.h"
-#include "tune/tune.h"
+#include "link/link.h"
 
 static char msg[128];
 
@@ -17,7 +17,7 @@ static uint8_t SendMsg(int len) {
   if ((size_t)len >= sizeof(msg)) {
     len = (int)sizeof(msg) - 1;
   }
-  return TuneTx(TUNE_CMD_LOG, (uint8_t*)msg, (uint32_t)len);
+  return LinkTx(LINK_CMD_LOG, (uint8_t*)msg, (uint32_t)len);
 };
 
 uint8_t ShtLog(const char* format, ...) {

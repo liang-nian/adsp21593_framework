@@ -1,6 +1,6 @@
 /*
  * UART log helpers.
- * ShtLog writes the formatted text through TuneTx, command 0x0C.
+ * ShtLog writes the formatted text through LinkTx, command 0x0C.
  * LngLog writes "file:line level message". File and line come from the call.
  */
 

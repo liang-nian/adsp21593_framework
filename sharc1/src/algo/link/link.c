@@ -2,9 +2,12 @@
 #include <stdint.h>
 
 #include "uart/uart.h"
-#include "tune.h"
+#include "ad2428/ad2428.h"
+#include "sport/sport.h"
+#include "log/log.h"
+#include "link.h"
 
-// 0x01: writeback on. No payload. The same frame turns it off.
+// 0x01: writeback. wb_flag gates kPayload. The echo is a framed reply.
 // 0x02: a2b mon. Host request has no payload. Reply is length + text.
 // 0x03: uart mon. Same request/reply split as 0x02.
 // 0x04: cpu load mon. Same request/reply split as 0x02.
@@ -14,19 +17,7 @@
 // 0x08: stats upl
 // 0x09: stats rst
 // 0x0A: algo type
-// 0x0C: log text, device to host, 1-byte length
-
-#define MAX_PAYLOAD_LEN   (512u)
-
-typedef struct TuneSt {
-  uint8_t wb_flag;
-  uint8_t a2b_mon_flag;
-  uint8_t uart_mon_flag;
-  uint8_t cpu_load_mon_flag;
-  uint8_t para_upl;
-  uint8_t para_dnl;
-  uint8_t sts_upl;
-} TuneSt;
+// 0x0C: log text, device to host, 4-byte length
 
 typedef enum ParseSt {
   kHeader1 = 0u,
@@ -40,8 +31,10 @@ typedef enum ParseSt {
 
 typedef struct RxPacket {
     uint8_t cmd;
+    uint8_t wb_flag;
+    uint16_t wb_crc;
     uint32_t len;
-    uint8_t payload[MAX_PAYLOAD_LEN];
+    uint32_t wb_left;
 } RxPacket;
 
 // Crc16 modbus high table.
@@ -120,8 +113,6 @@ static uint8_t ack[] = {0x5A, 0xA5, 0x05, 0x6F, 0x43};
 static uint8_t nack[] = {0x5A, 0xA5, 0x06, 0xFF, 0x76};
 static uint8_t header[] = {0x5A, 0xA5};
 
-static TuneSt st = {0};
-
 static inline uint16_t Crc16Update(uint16_t cur_crc, uint8_t byte) {
   uint8_t idx;
   uint8_t crc_hi = (uint8_t)(cur_crc >> 8u);
@@ -134,18 +125,20 @@ static inline uint16_t Crc16Update(uint16_t cur_crc, uint8_t byte) {
   return ((uint16_t)crc_hi << 8u) | crc_lo;
 };
 
-static ParseSt CmdProc(uint8_t cmd) {
-  switch (cmd) {
-    case TUNE_CMD_WB:
+static ParseSt CmdProc(RxPacket* packet) {
+  packet->wb_flag = 0u;
+  switch (packet->cmd) {
+    case LINK_CMD_WB:
+      packet->wb_flag = 1u;
+      return kLen;
+
+    case LINK_CMD_A2B_MON:
       return kCrcLo;
 
-    case TUNE_CMD_A2B_MON:
+    case LINK_CMD_UART_MON:
       return kCrcLo;
 
-    case TUNE_CMD_UART_MON:
-      return kCrcLo;
-
-    case TUNE_CMD_CPU_MON:
+    case LINK_CMD_CPU_MON:
       return kCrcLo;
 
     default:
@@ -155,20 +148,16 @@ static ParseSt CmdProc(uint8_t cmd) {
 
 static void CrcProc(uint8_t cmd) {
   switch (cmd) {
-    case TUNE_CMD_WB:
-      st.wb_flag = 1;
+    case LINK_CMD_A2B_MON:
+      Ad24280MonReq();
       break;
 
-    case TUNE_CMD_A2B_MON:
-      st.a2b_mon_flag = 1;
+    case LINK_CMD_UART_MON:
+      Uart0MonReq();
       break;
 
-    case TUNE_CMD_UART_MON:
-      st.uart_mon_flag = 1;
-      break;
-
-    case TUNE_CMD_CPU_MON:
-      st.cpu_load_mon_flag = 1;
+    case LINK_CMD_CPU_MON:
+      CpuMsgMonReq();
       break;
 
     default:
@@ -176,19 +165,11 @@ static void CrcProc(uint8_t cmd) {
   }
 };
 
-uint8_t TuneA2bMonFlag(void) { return st.a2b_mon_flag; }
-void TuneA2bMonFlagClr(void) { st.a2b_mon_flag = 0u; }
-uint8_t TuneUartMonFlag(void) { return st.uart_mon_flag; }
-void TuneUartMonFlagClr(void) { st.uart_mon_flag = 0u; }
-uint8_t TuneCpuMonFlag(void) { return st.cpu_load_mon_flag; }
-void TuneCpuMonFlagClr(void) { st.cpu_load_mon_flag = 0u; }
-uint8_t TuneWbFlag(void) { return st.wb_flag; }
-void TuneWbFlagClr(void) { st.wb_flag = 0u; }
-
-void TuneRx(uint8_t byte) {
+static void RxByte(uint8_t byte) {
   static ParseSt state = kHeader1;
   static RxPacket packet;
-  static uint8_t payload_idx = 0;
+  static uint32_t payload_idx = 0;
+  static uint8_t len_idx = 0;
   static uint16_t crc_calc = 0xFFFF;
   static uint8_t crc_rx_low = 0;
 
@@ -213,25 +194,54 @@ void TuneRx(uint8_t byte) {
     case kCmd:
       packet.cmd = byte;
       crc_calc = Crc16Update(crc_calc, byte);
-      state = CmdProc(packet.cmd);
+      state = CmdProc(&packet);
+      if (state == kLen) {
+        packet.len = 0u;
+        len_idx = 0u;
+      }
       break;
 
     case kLen:
-      packet.len = byte;
+      packet.len |= (uint32_t)byte << (8u * len_idx);
       crc_calc = Crc16Update(crc_calc, byte);
-      payload_idx = 0;
-      if (packet.len > 0) state = kPayload;
-      else state = kCrcLo;
+      len_idx++;
+      if (len_idx < 4u) {
+        break;
+      }
+      payload_idx = 0u;
+      if (packet.wb_flag) {
+        packet.wb_left = packet.len;
+        if (LinkTxStart(packet.cmd, packet.len, &packet.wb_crc) != 0u) {
+          packet.wb_flag = 0u;
+        }
+      }
+      if (packet.len == 0u) {
+        if (packet.wb_flag) {
+          LinkTxEnd(packet.wb_left, packet.wb_crc);
+          packet.wb_flag = 0u;
+        }
+        state = kCrcLo;
+      } else {
+        state = kPayload;
+      }
       break;
 
     case kPayload:
-      packet.payload[payload_idx++] = byte;
       crc_calc = Crc16Update(crc_calc, byte);
-
+      if (packet.wb_flag) {
+        if (LinkTxData(&byte, 1u, &packet.wb_left, &packet.wb_crc) != 0u) {
+          LinkTxEnd(packet.wb_left, packet.wb_crc);
+          packet.wb_flag = 0u;
+        }
+      }
+      payload_idx++;
       if (payload_idx >= packet.len) {
+        if (packet.wb_flag) {
+          LinkTxEnd(packet.wb_left, packet.wb_crc);
+          packet.wb_flag = 0u;
+        }
         state = kCrcLo;
       }
-      // Add timer cnt here, control in timer driver for 500 ms.
       break;
 
     case kCrcLo:
@@ -244,6 +254,9 @@ void TuneRx(uint8_t byte) {
 
       if (crc_rx == crc_calc) {
         CrcProc(packet.cmd);
+      } else {
+        ShtLog("crc fail cmd 0x%02X rx 0x%04X calc 0x%04X.\n",
+               (unsigned)packet.cmd, (unsigned)crc_rx, (unsigned)crc_calc);
       }
       state = kHeader1;
       break;
@@ -255,41 +268,96 @@ void TuneRx(uint8_t byte) {
   }
 };
 
-/* One framed write. len == 0 is header + cmd + CRC. len > 0 adds one length
- * byte and the payload. CRC covers cmd, the length byte, and the payload. */
-uint8_t TuneTx(uint8_t cmd, uint8_t* data, uint32_t len) {
-  uint32_t i;
-  uint16_t crc16 = 0xFFFF;
-  uint8_t len8;
-  uint8_t crc_bytes[2];
+void LinkRx(void) {
+  uint8_t byte;
 
-  if (len > 255u || (len > 0u && data == NULL)) {
+  while (!Uart0Rd(&byte)) {
+    RxByte(byte);
+  }
+};
+
+/* Header, command, and the 4-byte little-endian length when len > 0.
+ * crc is set to 0xFFFF and then covers cmd and the length bytes. */
+uint8_t LinkTxStart(uint8_t cmd, uint32_t len, uint16_t* crc) {
+  uint8_t len_bytes[4];
+  uint32_t i;
+
+  if (crc == NULL) {
     return 1u;
   }
-
+  *crc = 0xFFFFu;
   if (Uart0Wr(header, 2u) != 0u) {
     return 1u;
   }
   if (Uart0Wr(&cmd, 1u) != 0u) {
     return 1u;
   }
-  crc16 = Crc16Update(crc16, cmd);
-
-  if (len > 0u) {
-    len8 = (uint8_t)len;
-    if (Uart0Wr(&len8, 1u) != 0u) {
-      return 1u;
-    }
-    crc16 = Crc16Update(crc16, len8);
-    if (Uart0Wr(data, len) != 0u) {
-      return 1u;
-    }
-    for (i = 0u; i < len; ++i) {
-      crc16 = Crc16Update(crc16, data[i]);
-    }
+  *crc = Crc16Update(*crc, cmd);
+  if (len == 0u) {
+    return 0u;
   }
+  len_bytes[0] = (uint8_t)(len & 0xFFu);
+  len_bytes[1] = (uint8_t)((len >> 8) & 0xFFu);
+  len_bytes[2] = (uint8_t)((len >> 16) & 0xFFu);
+  len_bytes[3] = (uint8_t)((len >> 24) & 0xFFu);
+  if (Uart0Wr(len_bytes, 4u) != 0u) {
+    return 1u;
+  }
+  for (i = 0u; i < 4u; ++i) {
+    *crc = Crc16Update(*crc, len_bytes[i]);
+  }
+  return 0u;
+};
 
-  crc_bytes[0] = (uint8_t)(crc16 & 0xFFu);
-  crc_bytes[1] = (uint8_t)(crc16 >> 8);
+/* One slice of the payload. total_len counts down by data_len. */
+uint8_t LinkTxData(uint8_t* data, uint32_t data_len, uint32_t* total_len,
+                   uint16_t* crc) {
+  uint32_t i;
+
+  if (total_len == NULL || crc == NULL) {
+    return 1u;
+  }
+  if (data_len == 0u) {
+    return 0u;
+  }
+  if (data == NULL || data_len > *total_len) {
+    return 1u;
+  }
+  if (Uart0Wr(data, data_len) != 0u) {
+    return 1u;
+  }
+  for (i = 0u; i < data_len; ++i) {
+    *crc = Crc16Update(*crc, data[i]);
+  }
+  *total_len -= data_len;
+  return 0u;
+};
+
+/* total_len must already be 0. Otherwise the CRC is not sent. */
+uint8_t LinkTxEnd(uint32_t total_len, uint16_t crc) {
+  uint8_t crc_bytes[2];
+
+  if (total_len != 0u) {
+    LngLog("E", "tx left %u\n", (unsigned)total_len);
+    return 1u;
+  }
+  crc_bytes[0] = (uint8_t)(crc & 0xFFu);
+  crc_bytes[1] = (uint8_t)(crc >> 8);
   return Uart0Wr(crc_bytes, 2u);
+};
+
+uint8_t LinkTx(uint8_t cmd, uint8_t* data, uint32_t len) {
+  uint16_t crc;
+  uint32_t left = len;
+
+  if (len > 0u && data == NULL) {
+    return 1u;
+  }
+  if (LinkTxStart(cmd, len, &crc) != 0u) {
+    return 1u;
+  }
+  if (len > 0u && LinkTxData(data, len, &left, &crc) != 0u) {
+    return LinkTxEnd(left, crc);
+  }
+  return LinkTxEnd(left, crc);
 };

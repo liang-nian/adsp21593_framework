@@ -5,7 +5,7 @@
 #include <stdarg.h>
 
 #include "uart.h"
-#include "tune/tune.h"
+#include "link/link.h"
 
 // Buffer size depends on baud rate and polling interval.
 #define DMA_LEN                 (512u)
@@ -19,6 +19,7 @@
 
 typedef struct UartDmaMsg {
   uint8_t is_tx_over;
+  uint8_t mon_flag;
   uint32_t rx_rd_idx;
   uint32_t rx_wr_idx;
   uint32_t underrun_cnt;
@@ -76,6 +77,7 @@ void Uart0Poll(void) {
   uint32_t old_wr = uart0_msg.rx_wr_idx;
   uint32_t rd_idx = uart0_msg.rx_rd_idx;
   uint8_t is_overrun = 0u;
+
 
   /* XCNT counts down and can read 0 for one sample at the wrap.
    * DMA_LEN - 0 would be an index past the buffer. */
@@ -201,10 +203,18 @@ static void Uart0MonTx(const char* format, ...) {
   if ((size_t)len >= sizeof(msg)) {
     len = (int)sizeof(msg) - 1;
   }
-  TuneTx(TUNE_CMD_UART_MON, (uint8_t*)msg, (uint32_t)len);
+  LinkTx(LINK_CMD_UART_MON, (uint8_t*)msg, (uint32_t)len);
+};
+
+void Uart0MonReq(void) {
+  uart0_msg.mon_flag = 1u;
 };
 
 void Uart0Mon(void) {
+  if (!uart0_msg.mon_flag) {
+    return;
+  }
+  uart0_msg.mon_flag = 0u;
   Uart0MonTx("underrun cnt: %d.\n", uart0_msg.underrun_cnt);
   Uart0MonTx("overrun cnt: %d.\n", uart0_msg.overrun_cnt);
 };

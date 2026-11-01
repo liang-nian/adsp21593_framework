@@ -7,7 +7,7 @@
 #include "ad2428_reg.h"
 #include "twi/twi.h"
 #include "log/log.h"
-#include "tune/tune.h"
+#include "link/link.h"
 
 #define TIME_BND        (0x100000u)
 #define DATA_ERR_BND    (7u)
@@ -21,6 +21,7 @@ typedef struct Ad2428Msg {
   uint8_t int_src; // cur int src
   uint8_t int_type; // cur int type
   uint8_t node_num;
+  uint8_t mon_flag;
 } Ad2428Msg;
 
 static Ad2428Msg ad24280_mon = {0};
@@ -44,7 +45,7 @@ static void Ad2428MonTx(const char* format, ...) {
   if ((size_t)len >= sizeof(msg)) {
     len = (int)sizeof(msg) - 1;
   }
-  TuneTx(TUNE_CMD_A2B_MON, (uint8_t*)msg, (uint32_t)len);
+  LinkTx(LINK_CMD_A2B_MON, (uint8_t*)msg, (uint32_t)len);
 };
 
 static void Ad2428Mon(uint8_t master_dev, Ad2428Msg* mon) {
@@ -153,7 +154,15 @@ static void Ad2428Cfg(uint8_t master_dev, Ad2428Reg* cfg, uint32_t cfg_len,
   }
 };
 
+void Ad24280MonReq(void) {
+  ad24280_mon.mon_flag = 1u;
+};
+
 void Ad24280Mon(void) {
+  if (!ad24280_mon.mon_flag) {
+    return;
+  }
+  ad24280_mon.mon_flag = 0u;
   Twi2Open();
   Ad2428Mon(AD24280_MASTER_DEV, &ad24280_mon);
   Twi2Stop();

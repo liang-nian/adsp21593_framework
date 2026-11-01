@@ -13,6 +13,7 @@ uint8_t Uart0Wr(uint8_t* val, uint32_t len);
 void Uart0Init(void);
 void Uart0Close(void);
 void Uart0Mon(void);
+void Uart0MonReq(void);
 
 #ifdef __cplusplus
 } // extern "C"
