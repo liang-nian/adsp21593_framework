@@ -62,6 +62,7 @@ It is **not** a product SDK and is **not** affiliated with any automotive OEM or
 framework/
 ├── sharc1/          # Core 1 (drivers + audio flow)
 ├── sharc2/          # Core 2
+├── host/            # Python serial front end
 ├── doc/             # adsp21593_framework.md and bugs.md
 ├── .gitignore
 ├── LICENSE
@@ -75,6 +76,26 @@ Intended for **CrossCore Embedded Studio (CCES)** / Analog Devices SHARC toolcha
 1. Open the CCES workspace containing `sharc1` and `sharc2`.
 2. Build both cores (SHARC1 typically boots and enables SHARC2).
 3. Flash / debug with your usual ADSP-21593 connection.
+
+### Host
+
+`host/` is a Python window that talks to SHARC1 over UART. The virtualenv lives at the repo root, not inside `host/`.
+
+From the repo root:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python -m pip install -r host\requirements.txt
+.\.venv\Scripts\python host\app.py
+```
+
+The baud box starts at `921600`. Change it before **打开** if the board is using another rate. **刷新** reloads the port list. **打开** / **关闭** owns the serial port.
+
+**A2B 监视**, **UART 监视**, and **CPU 负载** each send one command. Replies and device logs land in **日志**.
+
+**输入** is separate from the log. Drag the bar between **输入** and **日志** to change the input height. **发送** is reserved and does not transmit. **回显发送** (or Ctrl+Enter) sends the input text as one writeback frame. The returned payload is written into **日志**. The lamp next to the button turns green when the whole returned frame matches the frame that was sent, including the header, command, length, payload, and CRC. It turns red when any of those bytes differ, or when the reply does not arrive. `host/uart_test_1000.txt` is a 1000-word paste for that box.
+
+**CRC 测试** stays lit while it is on. Every frame sent after that, including monitor commands and writeback, carries an inverted CRC. The board logs `crc fail` and does not run the command. Click the button again to send normal CRCs.
 
 ### How to read the notes
 
@@ -147,6 +168,7 @@ Defined in `sport.h`:
 framework/
 ├── sharc1/
 ├── sharc2/
+├── host/            # Python 上位机
 ├── doc/             # adsp21593_framework.md 与 bugs.md
 ├── LICENSE
 └── README.md
@@ -155,6 +177,26 @@ framework/
 ### 构建
 
 面向 **CrossCore Embedded Studio (CCES)** / ADI SHARC 工具链：打开含 `sharc1`、`sharc2` 的工作区 → 编译双核 → 烧录 / 调试。
+
+### 上位机
+
+`host/` 是和 SHARC1 串口通讯的 Python 窗口。虚拟环境在仓库根目录，不在 `host/` 里面。
+
+在仓库根目录执行：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python -m pip install -r host\requirements.txt
+.\.venv\Scripts\python host\app.py
+```
+
+波特率框默认 `921600`。板子用别的速率时，先改数字再点 **打开**。**刷新** 重新列出串口。**打开** / **关闭** 占用这路串口。
+
+**A2B 监视**、**UART 监视**、**CPU 负载** 各发一条命令。回包和设备日志都进 **日志**。
+
+**输入** 和日志是两块。拖 **输入** 和 **日志** 中间的分隔条，输入栏会变高或变矮。**发送** 先留着，点下去不会发出数据。**回显发送**（或 Ctrl+Enter）把输入栏里的文字打成一帧回写发出去。回来的负载写在 **日志** 里。旁边的指示灯在整帧一致时变绿：帧头、命令、长度、负载和 CRC 都要相同。任一字节不同，或没有回包，灯变红。`host/uart_test_1000.txt` 是一段 1000 个英文单词的文本，可以贴进输入栏做这次测试。
+
+**CRC 测试** 打开后按钮保持点亮。之后发出去的每一帧，包括监视命令和回显，CRC 都按位取反。板子会打出 `crc fail`，这条命令不执行。再点一次按钮，CRC 恢复正常。
 
 ### 阅读方式
 
