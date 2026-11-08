@@ -1,6 +1,6 @@
 # ADSP-21593 音频框架
 
-adsp21593 似乎没有像是 sc589 baremetal 那样的官方 framework，索性现在学习到这块板子，顺带着基于评估板做一版软件出来试试看。
+adsp21593 似乎没有像是 sc589 baremetal 那样的官方 framework，索性现在学习到这块板子，顺带着基于评估板做一版软件出来试试看。码仓：https://github.com/liang-nian/adsp21593_framework。
 
 ---
 
